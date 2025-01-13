@@ -95,8 +95,20 @@ export default class RaftChannelWebSocket implements RaftChannel {
     // Disconnect websocket
     this._webSocket?.close(1000);
 
-    // Debug
-    RaftLog.debug(`RaftChannelWebSocket.disconnect attempting to close websocket`);
+    // Wait a bit
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+
+    // Close the websocket
+    if (this._webSocket) {
+      this._webSocket.onmessage = null;
+      this._webSocket.onclose = null;
+      this._webSocket.onerror = null;
+      this._webSocket = null;
+      // Debug
+      RaftLog.debug(`RaftChannelWebSocket.disconnect attempting to close websocket`);
+    } else {
+      RaftLog.debug(`RaftChannelWebSocket.disconnect - websocket already closed`);
+    }
   }
 
   pauseConnection(pause: boolean): void { RaftLog.verbose(`pauseConnection ${pause} - no effect for this channel type`); return; }
@@ -206,7 +218,12 @@ export default class RaftChannelWebSocket implements RaftChannel {
         resolve(true);
       }).catch((err: unknown) => {
         if (err instanceof Error) {
-          RaftLog.verbose(`WS open failed ${err.toString()}`)
+          RaftLog.warn(`WS open failed: ${err.message}`);
+        } else if (err && typeof err === 'object') {
+            const errorDetails = JSON.stringify(err, Object.getOwnPropertyNames(err));
+            RaftLog.warn(`WS open failed: ${errorDetails}`);
+        } else {
+            RaftLog.warn(`WS open failed: ${err}`);
         }
         // Resolve - failed
         reject(false);
