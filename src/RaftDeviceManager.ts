@@ -7,7 +7,7 @@
 //
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-import { DeviceAttributeState, DevicesState, DeviceState, getDeviceKey } from "./RaftDeviceStates";
+import { DeviceAttributeState, DeviceAttributesState, DevicesState, DeviceState, getDeviceKey } from "./RaftDeviceStates";
 import { DeviceMsgJson } from "./RaftDeviceMsg";
 import { RaftOKFail } from './RaftTypes';
 import { DeviceTypeInfo, DeviceTypeAction, DeviceTypeInfoRecs, RaftDevTypeInfoResponse } from "./RaftDeviceInfo";
@@ -16,6 +16,18 @@ import RaftSystemUtils from "./RaftSystemUtils";
 import RaftDeviceMgrIF from "./RaftDeviceMgrIF";
 import { structPack } from "./RaftStruct";
 // import RaftUtils from "./RaftUtils";
+
+export interface DeviceDecodedData {
+    deviceKey: string;
+    busName: string;
+    deviceAddress: string;
+    deviceType: string;
+    attrGroupName?: string;
+    attrValues: Record<string, number[]>;
+    timestampsUs: number[];
+    markers?: Record<string, unknown>;
+    fromOfflineBuffer?: boolean;
+}
 
 export class DeviceManager implements RaftDeviceMgrIF{
 
@@ -45,6 +57,7 @@ export class DeviceManager implements RaftDeviceMgrIF{
     private _newDeviceCallbacks: Array<(deviceKey: string, state: DeviceState) => void> = [];
     private _newDeviceAttributeCallbacks: Array<(deviceKey: string, attrState: DeviceAttributeState) => void> = [];
     private _newAttributeDataCallbacks: Array<(deviceKey: string, attrState: DeviceAttributeState) => void> = [];
+    private _decodedDataCallbacks: Array<(decoded: DeviceDecodedData) => void> = [];
 
     // Debug message index (to help debug with async messages)
     private _debugMsgIndex = 0;
@@ -144,6 +157,16 @@ export class DeviceManager implements RaftDeviceMgrIF{
 
     public removeAttributeDataCallback(callback: (deviceKey: string, attrState: DeviceAttributeState) => void): void {
         this._newAttributeDataCallbacks = this._newAttributeDataCallbacks.filter((cb) => cb !== callback);
+    }
+
+    public addDecodedDataCallback(callback: (decoded: DeviceDecodedData) => void): void {
+        if (!this._decodedDataCallbacks.includes(callback)) {
+            this._decodedDataCallbacks.push(callback);
+        }
+    }
+
+    public removeDecodedDataCallback(callback: (decoded: DeviceDecodedData) => void): void {
+        this._decodedDataCallbacks = this._decodedDataCallbacks.filter((cb) => cb !== callback);
     }
 
     ////////////////////////////////////////////////////////////////////////////
@@ -293,6 +316,8 @@ export class DeviceManager implements RaftDeviceMgrIF{
                 // Iterate over attribute groups
                 const attrGroupDataLen = sectionLen - sectionHeaderLen;
                 const attrGroupStartPos = attrGroupPos;
+                const attrLengthsBefore = this.snapshotAttrLengths(deviceState.deviceAttributes, pollRespMetadata);
+                const timelineLenBefore = deviceState.deviceTimeline.timestampsUs.length;
                 while (attrGroupPos < attrGroupStartPos + attrGroupDataLen) {
 
                     // Add bounds checking
@@ -328,6 +353,10 @@ export class DeviceManager implements RaftDeviceMgrIF{
 
                     // console.log(`DevMan.handleClientMsgBinary group done debugIdx ${debugMsgIndex} attrGroupPos ${attrGroupPos} sectionLen ${sectionLen} msgPos ${msgPos} rxMsgLen ${rxMsg.length} remainingLen ${remainingLen}`);
                 }
+
+                // Inform decoded-data callbacks
+                this.emitDecodedData(deviceKey, busNum.toString(), devAddr.toString(), deviceState,
+                    pollRespMetadata, attrLengthsBefore, timelineLenBefore);
             } else {
                 console.warn(`DevMan.handleClientMsgBinary debugIdx ${debugMsgIndex} deviceState incomplete for device ${deviceKey}, skipping attribute processing`);
             }
@@ -441,6 +470,8 @@ export class DeviceManager implements RaftDeviceMgrIF{
                     return;
                 }
 
+                const markers = this.extractMarkers(attrGroups);
+
                 // Iterate attribute groups
                 Object.entries(attrGroups).forEach(([attrGroupName, msgHexStr]) => {
 
@@ -463,6 +494,9 @@ export class DeviceManager implements RaftDeviceMgrIF{
                     // Iterate over attributes in the group
                     const pollRespMetadata = deviceState.deviceTypeInfo!.resp!;
 
+                    const attrLengthsBefore = this.snapshotAttrLengths(deviceState.deviceAttributes, pollRespMetadata);
+                    const timelineLenBefore = deviceState.deviceTimeline.timestampsUs.length;
+
                     // Loop
                     while (msgBufIdx < msgBytes.length) {
 
@@ -475,6 +509,9 @@ export class DeviceManager implements RaftDeviceMgrIF{
                         msgBufIdx = newMsgBufIdx;
                         deviceState.stateChanged = true;
                     }
+
+                    this.emitDecodedData(deviceKey, busName, devAddr, deviceState, pollRespMetadata,
+                        attrLengthsBefore, timelineLenBefore, attrGroupName, markers);
                 });
             });
         });
@@ -711,5 +748,92 @@ export class DeviceManager implements RaftDeviceMgrIF{
             bytes[i] = parseInt(hex.substr(i * 2, 2), 16);
         }
         return bytes;
+    }
+
+    ////////////////////////////////////////////////////////////////////////////
+    // Helpers for decoded data callbacks
+    ////////////////////////////////////////////////////////////////////////////
+
+    private snapshotAttrLengths(deviceAttrs: DeviceAttributesState, pollRespMetadata: DeviceTypeInfo["resp"]): Record<string, number> {
+        const lengths: Record<string, number> = {};
+        if (!pollRespMetadata) {
+            return lengths;
+        }
+        pollRespMetadata.a.forEach((attr) => {
+            lengths[attr.n] = deviceAttrs[attr.n]?.values.length || 0;
+        });
+        return lengths;
+    }
+
+    private emitDecodedData(
+        deviceKey: string,
+        busName: string,
+        devAddr: string,
+        deviceState: DeviceState,
+        pollRespMetadata: DeviceTypeInfo["resp"],
+        attrLengthsBefore: Record<string, number>,
+        timelineLenBefore: number,
+        attrGroupName = "",
+        markers?: Record<string, unknown>,
+    ): void {
+
+        if (!pollRespMetadata) {
+            return;
+        }
+
+        const attrValues: Record<string, number[]> = {};
+        let hasValues = false;
+
+        pollRespMetadata.a.forEach((attr) => {
+            const attrState = deviceState.deviceAttributes[attr.n];
+            if (!attrState) {
+                return;
+            }
+            const prevLen = attrLengthsBefore[attr.n] || 0;
+            if (attrState.values.length > prevLen) {
+                attrValues[attr.n] = attrState.values.slice(prevLen);
+                hasValues = hasValues || attrValues[attr.n].length > 0;
+            }
+        });
+
+        if (!hasValues) {
+            return;
+        }
+
+        const timestampsUs = deviceState.deviceTimeline.timestampsUs.slice(timelineLenBefore);
+
+        const decoded: DeviceDecodedData = {
+            deviceKey,
+            busName,
+            deviceAddress: devAddr,
+            deviceType: deviceState.deviceType,
+            attrGroupName: attrGroupName || undefined,
+            attrValues,
+            timestampsUs,
+        };
+
+        if (markers && Object.keys(markers).length > 0) {
+            decoded.markers = markers;
+            decoded.fromOfflineBuffer = this.isTruthy(markers["_buf"]);
+        }
+
+        this._decodedDataCallbacks.forEach((cb) => cb(decoded));
+    }
+
+    private extractMarkers(attrGroups: any): Record<string, unknown> {
+        const markers: Record<string, unknown> = {};
+        if (!attrGroups || typeof attrGroups !== "object") {
+            return markers;
+        }
+        Object.entries(attrGroups).forEach(([key, value]) => {
+            if (key.startsWith("_") && key !== "_t" && key !== "_o") {
+                markers[key] = value;
+            }
+        });
+        return markers;
+    }
+
+    private isTruthy(val: unknown): boolean {
+        return val === true || val === 1 || val === "1";
     }
 }

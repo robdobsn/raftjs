@@ -91,7 +91,7 @@ export default class RaftChannelSimulated implements RaftChannel {
           this._simulatedDeviceInfo = parsedLocator;
         }
       } catch (e) {
-        RaftLog.warn(`RaftChannelSimulated.connect - error parsing locator ${locator}`);
+        RaftLog.warn(`RaftChannelSimulated.connect - error parsing locator ${locator}, ${e}`);
         return false;
       }
     }
