@@ -115,7 +115,7 @@ export default class RaftChannelWebSerial implements RaftChannel {
 
   // Serial interface will require subscription, but don't start it by default
   requiresSubscription(): boolean {
-    return false;
+    return true;
   }
 
   // RICREST command before disconnect
