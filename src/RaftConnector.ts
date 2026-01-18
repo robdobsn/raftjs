@@ -267,6 +267,17 @@ export default class RaftConnector {
     // Store locator
     this._channelConnLocator = locator;
 
+    // Get system type
+    if (this._getSystemTypeCB) {
+      // Get system type
+      this._systemType = await this._getSystemTypeCB(this._raftSystemUtils);
+
+      // Set defaults
+      if (this._systemType && this._systemType.defaultWiFiHostname) {
+        this._raftSystemUtils.setDefaultWiFiHostname(this._systemType.defaultWiFiHostname);
+      }
+    }
+
     // Connect
     let connOk = false;
     try {
@@ -280,16 +291,6 @@ export default class RaftConnector {
     }
 
     if (connOk) {
-      // Get system type
-      if (this._getSystemTypeCB) {
-        // Get system type
-        this._systemType = await this._getSystemTypeCB(this._raftSystemUtils);
-
-        // Set defaults
-        if (this._systemType && this._systemType.defaultWiFiHostname) {
-          this._raftSystemUtils.setDefaultWiFiHostname(this._systemType.defaultWiFiHostname);
-        }
-      }
 
       // Setup system type
       if (this._systemType) {
@@ -309,14 +310,18 @@ export default class RaftConnector {
         }
       }
 
+      // configure file handler
+      this.configureFileHandler(this._raftChannel.fhFileBlockSize(), this._raftChannel.fhBatchAckSize());
+
       // Send connected event
       this.onConnEvent(RaftConnEvent.CONN_CONNECTED);
 
     } else {
       // Failed Event
       this.onConnEvent(RaftConnEvent.CONN_CONNECTION_FAILED);
-      // configure file handler
-      this.configureFileHandler(this._raftChannel.fhFileBlockSize(), this._raftChannel.fhBatchAckSize());
+
+      // Clear system type
+      this._systemType = null;
     }
 
     return connOk;
