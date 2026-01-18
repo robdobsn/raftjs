@@ -59,7 +59,7 @@ export default class RaftConnector {
 
   // Retry connection if lost
   private _retryIfLostEnabled = true;
-  private _retryIfLostForSecs = 10;
+  private _retryIfLostForSecs = 60;
   private _retryIfLostIsConnected = false;
   private _retryIfLostDisconnectTime: number | null = null;
   private readonly _retryIfLostRetryDelayMs = 500;
@@ -76,6 +76,11 @@ export default class RaftConnector {
     this._commsStats,
     this
   );
+
+  // get stream handler
+  getStreamHandler(): RaftStreamHandler {
+    return this._raftStreamHandler;
+  }
 
   // Event listener
   private _onEventFn: RaftEventFn | null = null;
@@ -608,7 +613,6 @@ export default class RaftConnector {
    * Retry connection
    */
   private _retryConnection(): void {
-
     // Check timeout
     if ((this._retryIfLostDisconnectTime !== null) &&
       (Date.now() - this._retryIfLostDisconnectTime < this._retryIfLostForSecs * 1000)) {

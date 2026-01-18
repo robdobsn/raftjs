@@ -54,7 +54,7 @@ export default class RaftChannelPhoneBLE implements RaftChannel {
 
   // Last message tx time
   private _msgTxTimeLast = Date.now();
-  private _msgTxMinTimeBetweenMs = 1;
+  private _msgTxMinTimeBetweenMs = 15;
   private readonly maxRetries = 1;
 
   // File Handler parameters
@@ -406,7 +406,8 @@ export default class RaftChannelPhoneBLE implements RaftChannel {
         // this._storeConnectionInfo(); // //
         // this._invalidateConnectionInfo(); // //
         RaftLog.warn(`onDeviceDisconnected BLEManager says device disconnected`);
-        // this.emit(RaftConnEvent.BLE_CONNECTION_ISSUE_DETECTED);
+        // this.emit(RaftConnEvent.CONN_ISSUE_DETECTED);
+        this.emit(RaftConnEvent.CONN_DISCONNECTED);
         try {
           if (this._bleSubscrOnRx) {
             this._bleSubscrOnRx.remove();
@@ -461,7 +462,7 @@ export default class RaftChannelPhoneBLE implements RaftChannel {
             );
 
             // Indicate connection issue resolved
-            // this.emit(RaftConnEvent.BLE_CONNECTION_ISSUE_RESOLVED);
+            // this.emit(RaftConnEvent.CONN_ISSUE_RESOLVED);
 
             // await this.ricConnector.retrieveMartySystemInfo();
             return;

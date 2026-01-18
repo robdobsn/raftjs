@@ -481,14 +481,34 @@ export default class RaftUtils {
     const timeout = new Promise((_, reject) => {
       id = setTimeout(() => {
         clearTimeout(id);
-        reject('Timed out in '+ ms + 'ms.')
+        reject('Timed out in ' + ms + 'ms.')
       }, ms)
     })
-  
+
     return Promise.race([
       promise,
       timeout
     ])
   }
-  
+
+  static toBufferSource(u8: Uint8Array<ArrayBufferLike>): BufferSource {
+    if (u8.buffer instanceof ArrayBuffer) {
+      // Respect byteOffset/byteLength
+      return u8.buffer.slice(u8.byteOffset, u8.byteOffset + u8.byteLength);
+    }
+    // e.g., SharedArrayBuffer -> copy into a real ArrayBuffer
+    const ab = new ArrayBuffer(u8.byteLength);
+    new Uint8Array(ab).set(u8);
+    return ab;
+  }
+  static toArrayBufferView(u8: Uint8Array<ArrayBufferLike>): Uint8Array<ArrayBuffer> {
+    if (u8.buffer instanceof ArrayBuffer) {
+      // keep the same bytes/offset/length, but the return type is now locked to ArrayBuffer
+      return new Uint8Array(u8.buffer, u8.byteOffset, u8.byteLength);
+    }
+    // e.g., SharedArrayBuffer → copy into a real ArrayBuffer
+    const ab = new ArrayBuffer(u8.byteLength);
+    new Uint8Array(ab).set(u8);
+    return new Uint8Array(ab);
+  }
 }

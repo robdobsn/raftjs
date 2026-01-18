@@ -17,10 +17,26 @@ const attrTypeBits: { [key: string]: number } = {
     };
 
 export function getAttrTypeBits(attrType: string): number {
-    if (attrType in attrTypeBits) {
-        return attrTypeBits[attrType];
+    let repeat = 1;
+    let baseAttrType = attrType;
+
+    const repeatStartIdx = attrType.indexOf("[");
+    if (repeatStartIdx >= 0) {
+        const repeatEndIdx = attrType.indexOf("]", repeatStartIdx + 1);
+        if (repeatEndIdx > repeatStartIdx) {
+            const repeatStr = attrType.slice(repeatStartIdx + 1, repeatEndIdx);
+            const parsedRepeat = parseInt(repeatStr, 10);
+            if (Number.isFinite(parsedRepeat) && parsedRepeat > 0) {
+                repeat = parsedRepeat;
+            }
+            baseAttrType = attrType.slice(0, repeatStartIdx);
+        }
     }
-    return 8;
+
+    if (baseAttrType in attrTypeBits) {
+        return attrTypeBits[baseAttrType] * repeat;
+    }
+    return 8 * repeat;
 }
 
 export function isAttrTypeSigned(attrType: string): boolean {
@@ -43,7 +59,7 @@ export interface DeviceTypeAttribute {
     at?: number | number[];         // Start pos in buffer (after timestamp) if present (otherwise use relative position) or array of byte positions for non-contiguous data
     u?: string;                     // Units (e.g. mm)
     r?: number[];                   // Range (either min, max or min, max, step or discrete values)
-    x?: number;                     // XOR bit mask to invert bits in the attribute value
+    x?: number | string;            // XOR bit mask to invert bits in the attribute value
     m?: number | string;            // AND bit mask to extract the attribute value from the message
     s?: number;                     // Shift value to shift the attribute value to the right (or left if negative)
     sb?: number;                    // Sign-bit position (0-based)
@@ -57,11 +73,13 @@ export interface DeviceTypeAttribute {
     vf?: boolean | number;          // Display attribute value in the device info panel
     vft?: string;                   // Attribute validity based on the value of another named attribute
     lut?: Array<LUTRow>;            // Lookup table for the attribute value - each row is a lookup table for a range of values e.g. [{"r":"0x20-0x30","v":0},{"r":"1,2,3","v":42},{r:"","v":1}]
+    resolution?: string;            
 }
 
 export interface CustomFunctionDefinition {
     n: string;                      // Function name
     c: string;                      // Function pseudo-code
+    j?: string;                     // Optional JavaScript implementation
 }
 
 export interface DeviceTypePollRespMetadata {

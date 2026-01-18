@@ -27,6 +27,7 @@ export { default as RaftUtils } from './RaftUtils';
 export { default as RaftSysTypeManager } from './RaftSysTypeManager';
 export { default as RaftDeviceMgrIF } from './RaftDeviceMgrIF';
 export { DeviceManager as RaftDeviceManager } from './RaftDeviceManager';
+export type { DeviceDecodedData } from './RaftDeviceManager';
 
 export * from './RaftTypes';
 export * from './RaftSystemType';

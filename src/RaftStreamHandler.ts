@@ -15,6 +15,7 @@ import { RaftOKFail, RaftStreamStartResp, RaftStreamType } from './RaftTypes';
 import RaftConnector from './RaftConnector';
 import { RaftConnEvent } from './RaftConnEvents';
 import { RICRESTElemCode } from './RaftProtocolDefs'
+import RaftUtils from './RaftUtils';
 
 export default class RaftStreamHandler {
 
@@ -49,7 +50,7 @@ export default class RaftStreamHandler {
 
   private _isStreaming = false;
   private _isPaused = false;
-  private _streamBuffer = new Uint8Array();
+  private _streamBuffer: Uint8Array<ArrayBuffer> = new Uint8Array();
   private _audioDuration = 0;
   private _audioByteRate = 0;
   private _streamPos = 0;
@@ -67,11 +68,11 @@ export default class RaftStreamHandler {
     this.onSoktoMsg = this.onSoktoMsg.bind(this);
   }
 
-  setNumBlocksWithoutPause(numBlocks: number){
+  setNumBlocksWithoutPause(numBlocks: number) {
     this._numBlocksWithoutPause = numBlocks;
   }
 
-  setLegacySoktoMode(legacyMode: boolean){
+  setLegacySoktoMode(legacyMode: boolean) {
     RaftLog.debug(`Setting legacy sokto mode to ${legacyMode}`);
     this._legacySoktoMode = legacyMode;
   }
@@ -94,9 +95,9 @@ export default class RaftStreamHandler {
     this._soktoReceived = false;
     this._soktoPos = 0;
     this._streamPos = 0;
-    this._streamBuffer = streamContents;
+    this._streamBuffer = RaftUtils.toArrayBufferView(streamContents);
     this._audioDuration = audioDuration;
-    this._audioByteRate = (streamContents.length / audioDuration)*1000;
+    this._audioByteRate = (streamContents.length / audioDuration) * 1000;
 
     this.clearFinishPointTimeout();
 
@@ -104,12 +105,12 @@ export default class RaftStreamHandler {
       (result: boolean) => {
         this._isPaused = false;
         this._streamIsStarting = false;
-        if (!result){
+        if (!result) {
           RaftLog.warn(`Unable to start stream. ufStart message send failed`);
           return;
         }
         //this.streamingPerformanceChecker();
-        if (!this._isStreaming){
+        if (!this._isStreaming) {
           this._isStreaming = true;
           this._sendStreamBuffer();
         }
@@ -127,7 +128,7 @@ export default class RaftStreamHandler {
     return this._streamIsStarting;
   }
 
- 
+
   clearFinishPointTimeout() {
     if (this.soundFinishPoint) {
       clearTimeout(this.soundFinishPoint);
@@ -191,11 +192,11 @@ export default class RaftStreamHandler {
     return true;
   }
 
-  get maxBlockSize () {
+  get maxBlockSize() {
     return this._maxBlockSize;
   }
 
-  set maxBlockSize (maxBlockSize: number) {
+  set maxBlockSize(maxBlockSize: number) {
     this._maxBlockSize = maxBlockSize;
     this.DEFAULT_MAX_BLOCK_SIZE = maxBlockSize;
   }
@@ -226,37 +227,37 @@ export default class RaftStreamHandler {
     return streamEndResp.rslt === 'ok';
   }
 
-/*
-  private async _sendAudioStopMsg(): Promise<RaftOKFail> {
-    const cmdMsg = `{"cmdName":"audio/stop"}`;
+  /*
+    private async _sendAudioStopMsg(): Promise<RaftOKFail> {
+      const cmdMsg = `{"cmdName":"audio/stop"}`;
+  
+      // Debug
+      RaftLog.debug(`sendAudioStopMsg ${cmdMsg}`);
+  
+      // Send
+      return this._msgHandler.sendRICREST<RaftOKFail>(
+        cmdMsg,
+        RICRESTElemCode.RICREST_ELEM_CODE_COMMAND_FRAME,
+      );
+    }
+  
+  
+    private async _sendStreamCancelMsg(): Promise<RaftOKFail> {
+      // File cancel command message
+      const cmdMsg = `{"cmdName":"ufCancel","reqStr":"ufCancel","streamID":${this._streamID}}`;
+  
+      // Debug
+      RaftLog.debug(`sendStreamCancelMsg ${cmdMsg}`);
+  
+      // Send
+      return this._msgHandler.sendRICREST<RaftOKFail>(
+        cmdMsg,
+        RICRESTElemCode.RICREST_ELEM_CODE_COMMAND_FRAME,
+      );
+    }
+  */
 
-    // Debug
-    RaftLog.debug(`sendAudioStopMsg ${cmdMsg}`);
-
-    // Send
-    return this._msgHandler.sendRICREST<RaftOKFail>(
-      cmdMsg,
-      RICRESTElemCode.RICREST_ELEM_CODE_COMMAND_FRAME,
-    );
-  }
-
-
-  private async _sendStreamCancelMsg(): Promise<RaftOKFail> {
-    // File cancel command message
-    const cmdMsg = `{"cmdName":"ufCancel","reqStr":"ufCancel","streamID":${this._streamID}}`;
-
-    // Debug
-    RaftLog.debug(`sendStreamCancelMsg ${cmdMsg}`);
-
-    // Send
-    return this._msgHandler.sendRICREST<RaftOKFail>(
-      cmdMsg,
-      RICRESTElemCode.RICREST_ELEM_CODE_COMMAND_FRAME,
-    );
-  }
-*/
-
-private async _sendStreamBuffer(): Promise<boolean> {
+  private async _sendStreamBuffer(): Promise<boolean> {
     const streamStartTime = Date.now();
 
     // Check streamID is valid
@@ -267,7 +268,7 @@ private async _sendStreamBuffer(): Promise<boolean> {
     let blockNum = 0;
     // Send stream blocks
     while (this._soktoPos < this._streamBuffer.length || this._isPaused) {
-      if (this._isPaused){
+      if (this._isPaused) {
         await new Promise((resolve) => setTimeout(resolve, 5));
         continue;
       }
@@ -301,8 +302,8 @@ private async _sendStreamBuffer(): Promise<boolean> {
         this._streamPos += blockSize;
         blockNum += 1;
 
-        if (this._audioByteRate && blockNum > this._numBlocksWithoutPause){
-          const pauseTime = ((blockSize / this._audioByteRate)*1000) - 10;
+        if (this._audioByteRate && blockNum > this._numBlocksWithoutPause) {
+          const pauseTime = ((blockSize / this._audioByteRate) * 1000) - 10;
           RaftLog.verbose(`Pausing for ${pauseTime} ms between audio packets. Bit rate ${this._audioByteRate * 8}`)
           await new Promise((resolve) => setTimeout(resolve, pauseTime));
         }

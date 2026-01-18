@@ -21,7 +21,7 @@ export default class RaftChannelBLE implements RaftChannel {
   _cmdUUID = 'aa76677e-9cfd-4626-a510-0d305be57c8e';
   _respUUID = 'aa76677e-9cfd-4626-a510-0d305be57c8f';
   _serviceUUIDs = ['aa76677e-9cfd-4626-a510-0d305be57c8d', 'da903f65-d5c2-4f4d-a065-d1aade7af874'];
-  
+
   // Device and characteristics
   private _bleDevice: BluetoothDevice | null = null;
   private _characteristicTx: BluetoothRemoteGATTCharacteristic | null = null;
@@ -307,12 +307,13 @@ export default class RaftChannelBLE implements RaftChannel {
       // Write to the characteristic
       try {
         if (this._characteristicTx) {
+          const bs = RaftUtils.toBufferSource(msg);
           if (this._characteristicTx.writeValueWithoutResponse) {
-            await this._characteristicTx.writeValueWithoutResponse(msg);
+            await this._characteristicTx.writeValueWithoutResponse(bs);
           } else if (this._characteristicTx.writeValue) {
-            await this._characteristicTx.writeValue(msg);
+            await this._characteristicTx.writeValue(bs);
           } else if (this._characteristicTx.writeValueWithResponse) {
-            await this._characteristicTx.writeValueWithResponse(msg);
+            await this._characteristicTx.writeValueWithResponse(bs);
           }
         }
         break;
@@ -345,12 +346,13 @@ export default class RaftChannelBLE implements RaftChannel {
 
     // Write to the characteristic
     if (this._characteristicTx) {
+      const bs = RaftUtils.toBufferSource(msg);
       if (this._characteristicTx.writeValueWithoutResponse) {
-        this._characteristicTx.writeValueWithoutResponse(msg);
+        this._characteristicTx.writeValueWithoutResponse(bs);
       } else if (this._characteristicTx.writeValue) {
-        this._characteristicTx.writeValue(msg);
+        this._characteristicTx.writeValue(bs);
       } else if (this._characteristicTx.writeValueWithResponse) {
-        this._characteristicTx.writeValueWithResponse(msg);
+        this._characteristicTx.writeValueWithResponse(bs);
       }
       return true;
     }

@@ -113,7 +113,7 @@ export default class RaftChannelWebSerial implements RaftChannel {
     this._raftMsgHandler = raftMsgHandler;
   }
 
-  // Serial interface will require subscription, but don't start it by default
+  // Serial interface will require subscription, start it by default
   requiresSubscription(): boolean {
     return true;
   }
