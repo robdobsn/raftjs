@@ -214,7 +214,22 @@ export default class RaftConnector {
    * Initialize the Raft channel
    */
   async initializeChannel(method: string): Promise<boolean> {
+    // Disconnect any existing channel first to avoid stale connections
+    RaftLog.verbose(`[RaftConnector.initializeChannel] START method=${method} hasExistingChannel=${!!this._raftChannel}`);
+    if (this._raftChannel) {
+      RaftLog.verbose(`[RaftConnector.initializeChannel] Disconnecting existing channel...`);
+      try {
+        await this._raftChannel.disconnect();
+        RaftLog.verbose(`[RaftConnector.initializeChannel] Existing channel disconnected successfully`);
+      } catch (e) {
+        RaftLog.warn(`[RaftConnector.initializeChannel] Error disconnecting existing channel: ${e}`);
+      }
+      this._raftChannel = null;
+      RaftLog.verbose(`[RaftConnector.initializeChannel] Existing channel nulled`);
+    }
+
     // Initialize raft channel
+    RaftLog.verbose(`[RaftConnector.initializeChannel] Creating new channel...`);
     if (method === 'WebBLE' || method === 'PhoneBLE') {
       const RaftChannelBLE = createBLEChannel();
       this._raftChannel = new RaftChannelBLE();

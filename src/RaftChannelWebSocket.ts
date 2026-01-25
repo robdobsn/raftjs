@@ -175,6 +175,16 @@ export default class RaftChannelWebSocket implements RaftChannel {
     //     return false;
     // }
     this._webSocket = null;
+    // Close any existing WebSocket before creating new one
+    RaftLog.verbose(`[RaftChannelWebSocket._wsConnect] START existing WebSocket?, ${!!this._webSocket}`);
+    if (this._webSocket) {
+      RaftLog.verbose(`[RaftChannelWebSocket._wsConnect] Closing existing WebSocket...`);
+      try {
+        this._webSocket.close(1000);
+      } catch (e) {
+        RaftLog.warn(`[RaftChannelWebSocket._wsConnect] Error closing existing WebSocket: ${e}`);
+      }
+    }
     return new Promise((resolve: (value: boolean | PromiseLike<boolean>) => void,
       reject: (reason?: unknown) => void) => {
       this._webSocketOpen(wsURL).then((ws) => {
@@ -222,6 +232,7 @@ export default class RaftChannelWebSocket implements RaftChannel {
 
       // Open the socket
       try {
+        RaftLog.verbose(`[RaftChannelWebSocket._webSocketOpen] Creating WebSocket: ${url}`);
         const webSocket = new WebSocket(url);
 
         // Open socket
@@ -232,10 +243,13 @@ export default class RaftChannelWebSocket implements RaftChannel {
           this._isConnected = true;
           resolve(webSocket);
         };
-        webSocket.onerror = function (evt: WebSocket.ErrorEvent) {
+        webSocket.onerror = (evt: WebSocket.ErrorEvent) => {
           RaftLog.warn(`RaftChannelWebSocket._webSocketOpen - onerror: ${evt.message}`);
           reject(evt);
-        }
+        };
+        webSocket.onclose = (evt: WebSocket.CloseEvent) => {
+          RaftLog.info(`[RaftChannelWebSocket._webSocketOpen] onclose fired! code: ${evt.code} reason: ${evt.reason} wasClean: ${evt.wasClean}`);
+        };
       } catch (error: unknown) {
         RaftLog.warn(`RaftChannelWebSocket._webSocketOpen - open failed ${error}`);
         reject(error);
