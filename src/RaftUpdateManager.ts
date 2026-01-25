@@ -414,7 +414,7 @@ export default class RICUpdateManager {
               15000
             );
             // trigger and wait for reboot
-            RaftLog.debug(`Restarting RIC`);
+            RaftLog.debug(`Restarting device`);
             try {
               await this._msgHandler.sendRICRESTURL<RaftOKFail>("reset");
             } catch (error) {

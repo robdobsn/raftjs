@@ -253,7 +253,7 @@ export class DeviceManager implements RaftDeviceMgrIF{
             // console.log(`DevMan.handleClientMsgBinary debugIdx ${debugMsgIndex} connMode ${busNum} isOnline ${isOnline} devAddr ${devAddr} devTypeIdx ${devTypeIdx} attrGroupDataLen ${sectionLen - sectionHeaderLen}`);
 
             // Device key
-            const deviceKey = getDeviceKey(busNum.toString(), devAddr.toString(), devTypeIdx.toString());
+            const deviceKey = getDeviceKey(busNum.toString(), devAddr.toString(16));
 
             // Update the last update time
             this._deviceLastUpdateTime[deviceKey] = Date.now();
@@ -410,15 +410,20 @@ export class DeviceManager implements RaftDeviceMgrIF{
 
                 // Device type name
                 let deviceTypeName = "";
+                let deviceTypeIdx = -1;
                 if (attrGroups && typeof attrGroups === 'object' && "_t" in attrGroups && typeof attrGroups._t === "string") {
                     deviceTypeName = attrGroups._t || "";
-                } else {
+                } else if (attrGroups && typeof attrGroups === 'object' && "_i" in attrGroups && typeof attrGroups._i === "number") {
+                    deviceTypeIdx = attrGroups._i || -1;
+                    deviceTypeName = deviceTypeIdx.toString();
+                } else
+                {
                     console.warn(`DeviceManager missing device type attrGroups ${JSON.stringify(attrGroups)}`);
                     return;
                 }
 
                 // Device key
-                const deviceKey = getDeviceKey(busName, devAddr, deviceTypeName);
+                const deviceKey = getDeviceKey(busName, devAddr);
 
                 // Update the last update time
                 this._deviceLastUpdateTime[deviceKey] = Date.now();

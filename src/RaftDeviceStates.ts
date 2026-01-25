@@ -87,6 +87,6 @@ export class DevicesState {
 }
 
 // Add the getDeviceKey method to generate a composite key
-export function getDeviceKey(busName: string, devAddr: string, devType: string): string {
-    return `${busName}_${devAddr}_${devType}`;
+export function getDeviceKey(busName: string, devAddr: string): string {
+    return `${busName}_${devAddr}`;
 }
