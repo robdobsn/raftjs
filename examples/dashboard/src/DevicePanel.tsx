@@ -117,23 +117,28 @@ const DevicePanel = ({ deviceKey, lastUpdated }: DevicePanelProps) => {
     };
 
     let headerText = `Device ${deviceState?.deviceTypeInfo?.name}`;
+    let bracketsAdded = false;
+    if ((deviceState?.busName !== undefined) && (deviceState?.busName !== "") && (deviceState?.busName !== "0")) {
+        headerText += ` (Bus ${deviceState?.busName}`;
+        bracketsAdded = true;
+    }
     if ((deviceState?.deviceAddress !== undefined) && (deviceState?.deviceAddress !== "") && (deviceState?.deviceAddress !== "0")) {
         // See if we can identify I2C addresses - should start with two bytes of 0s and then have a byte which is slot and a byte which is address
-        const addrInt = parseInt(deviceState?.deviceAddress, 10);
+        const addrInt = parseInt(deviceState?.deviceAddress, 16);
         if (addrInt < 65536) {
             const slot = addrInt >> 8;
-            const address = ("00" + (addrInt & 0xFF).toString(16)).slice(-2);
-            headerText += ` I2C Address 0x${address}`;
             if (slot === 0)
-                headerText += ` (Main Bus)`;
+                headerText += ` Main Bus`;
             else
-                headerText += ` (Slot ${slot})`;
+                headerText += ` Slot ${slot}`;
+            const address = ("00" + (addrInt & 0xFF).toString(16)).slice(-2);
+            headerText += ` Addr 0x${address}`;
         } else {
-            headerText += ` Address ${deviceState?.deviceAddress}`;
+            headerText += ` Addr ${deviceState?.deviceAddress}`;
         }
     }
-    if ((deviceState?.busName !== undefined) && (deviceState?.busName !== "") && (deviceState?.busName !== "0")) {
-        headerText += ` Bus ${deviceState?.busName}`;
+    if (bracketsAdded) {
+        headerText += `)`;
     }
     if (!deviceState?.isOnline) {
         headerText += " (Offline)";
