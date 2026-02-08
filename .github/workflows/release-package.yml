@@ -8,22 +8,29 @@ on:
         description: 'The branch to checkout'
         required: false
         default: 'main'
+
+# Required for OIDC trusted publishing
+permissions:
+  contents: read
+  id-token: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.inputs.branch || 'main' }}
 
-      # Setup .npmrc file to publish to npm
-      - uses: actions/setup-node@v2
+      # Setup Node.js with npm registry
+      - uses: actions/setup-node@v4
         with:
-          node-version: '16.x'
+          node-version: '20.x'
           registry-url: 'https://registry.npmjs.org'
+      
       - run: npm install
       - run: npm run build-all 
-      - run: npm publish
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }} 
+      
+      # Publish with provenance using OIDC
+      - run: npm publish --provenance --access public 
           
