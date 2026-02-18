@@ -181,6 +181,8 @@ export class RaftSysModInfoBLEMan {
 
 export type RaftProgressCBType = (received: number, total: number) => void;
 
+export type RaftStreamDataProgressCBType = (sent: number, total: number, progress: number) => void;
+
 export class RaftFileDownloadResult {
   fileData: Uint8Array | null = null;
   downloadedOk = false;

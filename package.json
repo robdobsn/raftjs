@@ -1,51 +1,51 @@
 {
-  "name": "@robdobsn/raftjs",
-  "version": "1.10.7",
-  "description": "Javascript/TS library for Raft library",
-  "main": "dist/web/main.js",
-  "types": "dist/web/main.d.ts",
-  "react-native": "dist/react-native/main.js",
-  "author": "Rob Dobson <rob@dobson.com>",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/robdobsn/raftjs.git"
-  },
-  "bugs": {
-    "url": "https://github.com/robdobsn/raftjs/issues"
-  },
-  "license": "MIT",
-  "keywords": [
-    "Raft"
-  ],
-  "publishConfig": {
-    "registry": "https://registry.npmjs.org/",
-    "access": "public"
-  },
-  "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "build:phone": "tsc -p tsconfig.react-native.json",
-    "build-all": "npm run clean && npm run build && npm run build:phone",
-    "lint": "eslint ./src",
-    "clean": "rimraf dist build package",
-    "docs": "typedoc --entryPoints src/main.ts",
-    "watch-all": "tsc -p tsconfig.json --watch & tsc -p tsconfig.react-native.json --watch"
-  },
-  "devDependencies": {
-    "@types/node": "^22.13.11",
-    "@types/web-bluetooth": "^0.0.21",
-    "@typescript-eslint/eslint-plugin": "^8.27.0",
-    "eslint": "^9.23.0",
-    "react-native-ble-plx": "^3.5.0",
-    "typescript": "^5.8.2",
-    "rimraf": "^6.0.1",
-    "@types/text-encoding": "^0.0.40"
-  },
-  "dependencies": {
-    "isomorphic-ws": "^5.0.0",
-    "tslib": "^2.8.1"
-  },
-  "peerDependencies": {
-    "react-native-ble-plx": "*",
-    "react-native": "*"
-  }
+    "name": "@robdobsn/raftjs",
+    "version": "1.11.1",
+    "description": "Javascript/TS library for Raft library",
+    "main": "dist/web/main.js",
+    "types": "dist/web/main.d.ts",
+    "react-native": "dist/react-native/main.js",
+    "author": "Rob Dobson <rob@dobson.com>",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/robdobsn/raftjs.git"
+    },
+    "bugs": {
+        "url": "https://github.com/robdobsn/raftjs/issues"
+    },
+    "license": "MIT",
+    "keywords": [
+        "Raft"
+    ],
+    "publishConfig": {
+        "registry": "https://registry.npmjs.org/",
+        "access": "public"
+    },
+    "scripts": {
+        "build": "tsc -p tsconfig.json",
+        "build:phone": "tsc -p tsconfig.react-native.json",
+        "build-all": "npm run clean && npm run build && npm run build:phone",
+        "lint": "eslint ./src",
+        "clean": "rimraf dist build package",
+        "docs": "typedoc --entryPoints src/main.ts",
+        "watch-all": "tsc -p tsconfig.json --watch & tsc -p tsconfig.react-native.json --watch"
+    },
+    "devDependencies": {
+        "@types/node": "^22.13.11",
+        "@types/web-bluetooth": "^0.0.21",
+        "@typescript-eslint/eslint-plugin": "^8.27.0",
+        "eslint": "^9.23.0",
+        "react-native-ble-plx": "^3.5.0",
+        "typescript": "^5.8.2",
+        "rimraf": "^6.0.1",
+        "@types/text-encoding": "^0.0.40"
+    },
+    "dependencies": {
+        "isomorphic-ws": "^5.0.0",
+        "tslib": "^2.8.1"
+    },
+    "peerDependencies": {
+        "react-native-ble-plx": "*",
+        "react-native": "*"
+    }
 }

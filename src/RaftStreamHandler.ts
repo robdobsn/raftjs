@@ -11,7 +11,7 @@
 import RaftLog from './RaftLog'
 import RaftMsgHandler from './RaftMsgHandler';
 import RaftCommsStats from './RaftCommsStats';
-import { RaftOKFail, RaftStreamStartResp, RaftStreamType } from './RaftTypes';
+import { RaftOKFail, RaftStreamStartResp, RaftStreamType, RaftStreamDataProgressCBType } from './RaftTypes';
 import RaftConnector from './RaftConnector';
 import { RaftConnEvent } from './RaftConnEvents';
 import { RICRESTElemCode } from './RaftProtocolDefs'
@@ -75,6 +75,89 @@ export default class RaftStreamHandler {
   setLegacySoktoMode(legacyMode: boolean) {
     RaftLog.debug(`Setting legacy sokto mode to ${legacyMode}`);
     this._legacySoktoMode = legacyMode;
+  }
+
+  /**
+   * streamData - stream arbitrary data to a named firmware endpoint using the RT_STREAM protocol.
+   * Returns a promise that resolves when the stream is complete or rejects on failure.
+   * @param streamContents data to stream
+   * @param fileName logical filename sent in ufStart (used by firmware to detect format, e.g. "pattern.thr")
+   * @param targetEndpoint REST API endpoint name registered on the firmware (e.g. "streampattern")
+   * @param progressCallback optional callback reporting (bytesSent, totalBytes, progressFraction)
+   * @returns Promise<boolean> true if stream completed successfully
+   */
+  async streamData(
+    streamContents: Uint8Array,
+    fileName: string,
+    targetEndpoint: string,
+    progressCallback?: RaftStreamDataProgressCBType,
+  ): Promise<boolean> {
+    // Reject if another stream is starting
+    if (this._streamIsStarting || this._lastStreamStartTime > (Date.now() - 500)) {
+      RaftLog.warn(`streamData: unable to start, too soon since last request`);
+      return false;
+    }
+
+    this._streamIsStarting = true;
+    this._lastStreamStartTime = Date.now();
+    this._soktoReceived = false;
+    this._soktoPos = 0;
+    this._streamPos = 0;
+    this._streamBuffer = RaftUtils.toArrayBufferView(streamContents);
+
+    // Send ufStart
+    const startOk = await this._sendStreamStartMsg(
+      fileName, targetEndpoint, RaftStreamType.REAL_TIME_STREAM, streamContents,
+    );
+    this._streamIsStarting = false;
+
+    if (!startOk) {
+      RaftLog.warn(`streamData: ufStart failed`);
+      return false;
+    }
+
+    // Send blocks
+    if (this._streamID === null) {
+      return false;
+    }
+
+    let pos = 0;
+    while (pos < this._streamBuffer.length) {
+      // Respect SOKTO feedback — if firmware reported a position mismatch, rewind
+      if (this._soktoReceived) {
+        RaftLog.verbose(`streamData: sokto received, pos was ${pos}, soktoPos ${this._soktoPos}`);
+        this._soktoReceived = false;
+        // Slow down on backpressure
+        await new Promise(r => setTimeout(r, 50));
+      }
+
+      const blockSize = Math.min(this._streamBuffer.length - pos, this._maxBlockSize);
+      const block = this._streamBuffer.slice(pos, pos + blockSize);
+      if (block.length > 0) {
+        const sentOk = await this._msgHandler.sendStreamBlock(block, pos, this._streamID);
+        this._commsStats.recordStreamBytes(block.length);
+        if (!sentOk) {
+          RaftLog.warn(`streamData: sendStreamBlock failed at pos ${pos}`);
+          return false;
+        }
+        pos += blockSize;
+        this._streamPos = pos;
+
+        // Progress callback
+        if (progressCallback) {
+          const progress = this._streamBuffer.length > 0 ? pos / this._streamBuffer.length : 1;
+          progressCallback(pos, this._streamBuffer.length, progress);
+        }
+      }
+
+      // Yield to avoid hogging the event loop
+      await new Promise(r => setTimeout(r, 1));
+    }
+
+    // Send ufEnd
+    const endOk = await this._sendStreamEndMsg(this._streamID);
+    RaftLog.debug(`streamData: complete, endOk=${endOk}`);
+    return endOk;
   }
 
   // Start streaming audio

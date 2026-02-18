@@ -14,7 +14,7 @@ import RaftChannelWebSocket from "./RaftChannelWebSocket";
 import RaftChannelWebSerial from "./RaftChannelWebSerial";
 import RaftChannelSimulated from "./RaftChannelSimulated";
 import RaftCommsStats from "./RaftCommsStats";
-import { RaftEventFn, RaftOKFail, RaftFileSendType, RaftFileDownloadResult, RaftProgressCBType, RaftBridgeSetupResp, RaftFileDownloadFn, RaftReportMsg } from "./RaftTypes";
+import { RaftEventFn, RaftOKFail, RaftFileSendType, RaftFileDownloadResult, RaftProgressCBType, RaftStreamDataProgressCBType, RaftBridgeSetupResp, RaftFileDownloadFn, RaftReportMsg } from "./RaftTypes";
 import RaftSystemUtils from "./RaftSystemUtils";
 import RaftFileHandler from "./RaftFileHandler";
 import RaftStreamHandler from "./RaftStreamHandler";
@@ -477,6 +477,28 @@ export default class RaftConnector {
   }
 
   // Mark: Streaming --------------------------------------------------------------------------------
+
+  /**
+   * streamData - stream arbitrary data to a named firmware endpoint using the RT_STREAM protocol.
+   * @param streamContents data to stream
+   * @param fileName logical filename sent in ufStart (e.g. "pattern.thr")
+   * @param targetEndpoint REST API endpoint name on the firmware (e.g. "streampattern")
+   * @param progressCallback optional (sent, total, progress) callback
+   * @returns Promise<boolean> true on success
+   */
+  async streamData(
+    streamContents: Uint8Array,
+    fileName: string,
+    targetEndpoint: string,
+    progressCallback?: RaftStreamDataProgressCBType,
+  ): Promise<boolean> {
+    if (this._raftStreamHandler && this.isConnected()) {
+      return this._raftStreamHandler.streamData(
+        streamContents, fileName, targetEndpoint, progressCallback,
+      );
+    }
+    return false;
+  }
 
   /**
    * streamAudio - stream audio
