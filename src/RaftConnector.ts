@@ -282,18 +282,7 @@ export default class RaftConnector {
     // Store locator
     this._channelConnLocator = locator;
 
-    // Get system type
-    if (this._getSystemTypeCB) {
-      // Get system type
-      this._systemType = await this._getSystemTypeCB(this._raftSystemUtils);
-
-      // Set defaults
-      if (this._systemType && this._systemType.defaultWiFiHostname) {
-        this._raftSystemUtils.setDefaultWiFiHostname(this._systemType.defaultWiFiHostname);
-      }
-    }
-
-    // Connect
+    // Connect channel first (system type resolution needs a live connection)
     let connOk = false;
     try {
       // Event
@@ -306,6 +295,16 @@ export default class RaftConnector {
     }
 
     if (connOk) {
+
+      // Resolve system type now that the channel is connected
+      if (this._getSystemTypeCB) {
+        this._systemType = await this._getSystemTypeCB(this._raftSystemUtils);
+
+        // Set defaults
+        if (this._systemType && this._systemType.defaultWiFiHostname) {
+          this._raftSystemUtils.setDefaultWiFiHostname(this._systemType.defaultWiFiHostname);
+        }
+      }
 
       // Setup system type
       if (this._systemType) {
