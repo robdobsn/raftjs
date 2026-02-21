@@ -381,6 +381,168 @@ h1 {
     background-color: #555;
 }
 
+.menu-item-toggle {
+    padding: 6px 10px;
+}
+
+.menu-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+}
+
+.menu-toggle input {
+    margin: 0;
+}
+
+.device-stats-panel {
+    flex: 0 0 220px;
+    min-width: 220px;
+    padding: 10px;
+    border: 1px solid #666;
+    border-radius: 4px;
+    background: #444;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.device-stats-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-weight: bold;
+}
+
+.device-stats-reset {
+    background: #555;
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    padding: 4px 8px;
+    cursor: pointer;
+    font-size: 0.8em;
+}
+
+.device-stats-reset:hover {
+    background: #666;
+}
+
+.device-stats-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 8px;
+}
+
+.device-stats-item {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.device-stats-label {
+    color: #bbb;
+    font-size: 0.85em;
+}
+
+.device-stats-value {
+    font-weight: 600;
+    font-size: 0.9em;
+}
+
+.poll-rate-dialog-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.poll-rate-dialog {
+    background: #333;
+    border: 1px solid #666;
+    border-radius: 6px;
+    padding: 18px 22px;
+    min-width: 240px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    color: #fff;
+}
+
+.poll-rate-dialog-title {
+    font-size: 1em;
+    font-weight: bold;
+    margin-bottom: 4px;
+}
+
+.poll-rate-dialog-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.poll-rate-input {
+    flex: 1;
+    background: #222;
+    border: 1px solid #666;
+    border-radius: 4px;
+    color: #fff;
+    padding: 6px 8px;
+    font-size: 1em;
+    width: 100%;
+}
+
+.poll-rate-unit {
+    color: #aaa;
+    font-size: 0.9em;
+}
+
+.poll-rate-preview {
+    font-size: 0.8em;
+    color: #aaa;
+}
+
+.poll-rate-status {
+    font-size: 0.85em;
+    color: #f90;
+}
+
+.poll-rate-dialog-buttons {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+}
+
+.poll-rate-btn {
+    padding: 6px 14px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.9em;
+}
+
+.poll-rate-btn-set {
+    background: #4a7;
+    color: #fff;
+}
+
+.poll-rate-btn-set:hover {
+    background: #5b8;
+}
+
+.poll-rate-btn-cancel {
+    background: #555;
+    color: #fff;
+}
+
+.poll-rate-btn-cancel:hover {
+    background: #666;
+}
+
 /* Adjust height for portrait orientation */
 @media (orientation: portrait) {
     .device-line-chart {

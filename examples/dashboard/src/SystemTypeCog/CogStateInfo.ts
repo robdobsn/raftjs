@@ -46,6 +46,14 @@ export class CogStateInfo {
         return this._deviceManager; 
     }
 
+    async handleBinaryPayload(rxMsg: Uint8Array): Promise<void> {
+        await this._deviceManager.handleClientMsgBinary(rxMsg);
+    }
+
+    async handleJsonPayload(jsonString: string): Promise<void> {
+        await this._deviceManager.handleClientMsgJson(jsonString);
+    }
+
     updateFromMsg(rxMsg: Uint8Array, frameTimeMs: number, isBinary: boolean): Array<string> {
 
         // Debug 
@@ -53,14 +61,14 @@ export class CogStateInfo {
 
         if (isBinary) {
             // console.log(`CogStateInfo: updateFromMsg: ${RaftUtils.bufferToHex(rxMsg)}`);
-            this._deviceManager.handleClientMsgBinary(rxMsg);
+            this.handleBinaryPayload(rxMsg);
         } else {
             // Convert Uint8Array to string
             const decoder = new TextDecoder('utf-8');
             const jsonString = decoder.decode(rxMsg.slice(2));
 
             // Handle using device manager
-            this._deviceManager.handleClientMsgJson(jsonString);
+            this.handleJsonPayload(jsonString);
         }
 
     //     // Debug

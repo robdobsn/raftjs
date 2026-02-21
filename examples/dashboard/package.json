@@ -1,6 +1,6 @@
 {
   "name": "raftjs-example-dashboard",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "",
   "scripts": {
     "start": "npm run clean && parcel build src/index.html && parcel src/index.html",

@@ -24,8 +24,13 @@ const SettingsScreen = ({ onBack }: { onBack: () => void }) => {
     settingsManager.getSetting('latencyAttributeName') || 'amb0'
   );
   const [latencyChangeThreshold, setLatencyChangeThreshold] = useState<number>(
-    settingsManager.getSetting('latencyChangeThreshold') || 100
+    settingsManager.getSetting('latencyChangeThreshold') ?? 100
   );
+
+  const parseIntOrDefault = (value: string, fallback: number): number => {
+    const parsed = Number.parseInt(value, 10);
+    return Number.isNaN(parsed) ? fallback : parsed;
+  };
 
   const handleSaveAndReturn = () => {
     // Save settings to SettingsManager
@@ -83,7 +88,7 @@ const SettingsScreen = ({ onBack }: { onBack: () => void }) => {
                   value={maxChartDataPoints}
                   onChange={(e) =>
                     setMaxChartDataPoints(
-                      Math.min(parseInt(e.target.value, 10) || 1, 500)
+                      Math.min(parseIntOrDefault(e.target.value, 1), 500)
                     )
                   }
                   style={{ width: '50px', marginLeft: '10px' }}
@@ -101,7 +106,7 @@ const SettingsScreen = ({ onBack }: { onBack: () => void }) => {
                   value={maxDatapointsToStore}
                   onChange={(e) =>
                     setMaxDatapointsToStore(
-                      Math.min(parseInt(e.target.value, 10) || 1, 100000)
+                      Math.min(parseIntOrDefault(e.target.value, 1), 100000)
                     )
                   }
                   style={{ width: '50px', marginLeft: '10px' }}
@@ -141,7 +146,7 @@ const SettingsScreen = ({ onBack }: { onBack: () => void }) => {
                       min="1"
                       value={latencyChangeThreshold}
                       onChange={(e) =>
-                        setLatencyChangeThreshold(parseInt(e.target.value, 10) || 1)
+                        setLatencyChangeThreshold(parseIntOrDefault(e.target.value, 1))
                       }
                       style={{ width: '60px', marginLeft: '10px' }}
                     />

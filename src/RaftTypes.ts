@@ -72,6 +72,31 @@ export class RaftOKFail {
   rslt = 'failComms';
 }
 
+export type RaftPubTopicRec = {
+  name: string;
+  idx: number;
+};
+
+export type RaftSubscriptionUpdateResponse = RaftOKFail & {
+  topics?: Array<RaftPubTopicRec>;
+};
+
+export type RaftPubTopicsResponse = RaftOKFail & {
+  topics?: Array<RaftPubTopicRec>;
+};
+
+export type RaftPublishFrameType = 'json' | 'binary' | 'unknown';
+
+export type RaftPublishFrameMeta = {
+  frameType: RaftPublishFrameType;
+  topicIndex?: number;
+  topicName?: string;
+  version?: number;
+  binaryHasEnvelope?: boolean;
+  binaryPayloadOffset?: number;
+  jsonString?: string;
+};
+
 export type RaftReportMsg = {
   msgType?: string;
   rslt?: string;

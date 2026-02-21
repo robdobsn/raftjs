@@ -8,13 +8,15 @@
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 import { DeviceTypeAction } from "./RaftDeviceInfo";
-import { DeviceAttributeState, DevicesState, DeviceState } from "./RaftDeviceStates";
+import { DeviceAttributeState, DevicesState, DeviceState, DeviceStats } from "./RaftDeviceStates";
 
 export default interface RaftDeviceMgrIF {
 
     // Get state of devices
     getDevicesState(): DevicesState;
     getDeviceState(deviceKey: string): DeviceState;
+    getDeviceStats(deviceKey: string): DeviceStats;
+    resetDeviceStats(deviceKey: string): void;
 
     // Settings
     setMaxDataPointsToStore(maxDataPointsToStore: number): void;

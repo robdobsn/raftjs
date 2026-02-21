@@ -20,6 +20,9 @@ import {
   RaftFileList,
   RaftFriendlyName,
   RaftOKFail,
+  RaftPubTopicRec,
+  RaftPubTopicsResponse,
+  RaftSubscriptionUpdateResponse,
   RaftSysModInfoBLEMan,
   RaftSystemInfo,
   RaftWifiScanResults,
@@ -40,6 +43,10 @@ export default class RaftSystemUtils {
   private _defaultWiFiHostname = "Raft";
   private _maxSecsToWaitForWiFiConn = 20;
 
+  // Publish topic index/name lookup tables (session scoped)
+  private _pubTopicIdxToName: { [idx: number]: string } = {};
+  private _pubTopicNameToIdx: { [name: string]: number } = {};
+
   /**
    * constructor
    * @param raftMsgHandler 
@@ -54,6 +61,58 @@ export default class RaftSystemUtils {
    */
   getMsgHandler(): RaftMsgHandler {
     return this._msgHandler;
+  }
+
+  /**
+   * Update publish topic maps from topic records.
+   */
+  updatePublishTopicMap(topicRecs: Array<RaftPubTopicRec> | undefined): void {
+    if (!topicRecs || !Array.isArray(topicRecs)) {
+      return;
+    }
+    for (const topicRec of topicRecs) {
+      if (!topicRec || typeof topicRec.name !== "string" || typeof topicRec.idx !== "number") {
+        continue;
+      }
+      this._pubTopicIdxToName[topicRec.idx] = topicRec.name;
+      this._pubTopicNameToIdx[topicRec.name] = topicRec.idx;
+    }
+  }
+
+  /**
+   * Update publish topic maps from subscription response.
+   */
+  updatePublishTopicMapFromSubscriptionResponse(resp: RaftSubscriptionUpdateResponse | RaftOKFail | null | undefined): void {
+    if (!resp || typeof resp !== "object") {
+      return;
+    }
+    if ("topics" in resp) {
+      this.updatePublishTopicMap((resp as RaftSubscriptionUpdateResponse).topics);
+    }
+  }
+
+  /**
+   * Fetch publish topic map from firmware endpoint.
+   */
+  async refreshPublishTopicMap(): Promise<boolean> {
+    try {
+      const pubTopicsResp = await this._msgHandler.sendRICRESTURL<RaftPubTopicsResponse>("pubtopics");
+      if (pubTopicsResp && pubTopicsResp.rslt === "ok") {
+        this.updatePublishTopicMap(pubTopicsResp.topics);
+        return true;
+      }
+    } catch (error) {
+      RaftLog.debug(`refreshPublishTopicMap failed ${error}`);
+    }
+    return false;
+  }
+
+  getPublishTopicName(topicIndex: number): string | undefined {
+    return this._pubTopicIdxToName[topicIndex];
+  }
+
+  getPublishTopicIndex(topicName: string): number | undefined {
+    return this._pubTopicNameToIdx[topicName];
   }
 
   /**

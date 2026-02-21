@@ -69,6 +69,15 @@ export interface DeviceTimeline {
     lastReportTimestampUs: number;
     reportTimestampOffsetUs: number;
 }
+
+export interface DeviceStats {
+    totalSamples: number;
+    windowMs: number;
+    windowSamples: number;
+    sampleRateHz: number;
+    lastSampleTimeMs: number | null;
+    lastUpdateTimeMs: number | null;
+}
     
 export interface DeviceState {
     deviceTypeInfo: DeviceTypeInfo | undefined;
@@ -86,7 +95,22 @@ export class DevicesState {
     [deviceKey: string]: DeviceState;
 }
 
-// Add the getDeviceKey method to generate a composite key
-export function getDeviceKey(busName: string, devAddr: string): string {
-    return `${busName}_${devAddr}`;
+// Format a numeric device address as canonical hex string:
+// lowercase, no "0x" prefix, no leading zeros
+export function formatDeviceAddrHex(addr: number): string {
+    return addr.toString(16);
+}
+
+// Generate a composite device key from bus number and hex address
+export function getDeviceKey(busNumberAsString: string, devAddrHexStr: string): string {
+    return `${busNumberAsString}_${devAddrHexStr}`;
+}
+
+// Parse a device key into its bus and address components
+export function parseDeviceKey(deviceKey: string): { bus: string; addr: string } {
+    const sep = deviceKey.indexOf('_');
+    if (sep < 0) {
+        return { bus: deviceKey, addr: '' };
+    }
+    return { bus: deviceKey.substring(0, sep), addr: deviceKey.substring(sep + 1) };
 }

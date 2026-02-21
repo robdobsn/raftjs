@@ -29,6 +29,7 @@ export { default as RaftDeviceMgrIF } from './RaftDeviceMgrIF';
 export { DeviceManager as RaftDeviceManager } from './RaftDeviceManager';
 export type { DeviceDecodedData } from './RaftDeviceManager';
 
+export * from './RaftPublish';
 export * from './RaftTypes';
 export * from './RaftSystemType';
 export * from './RaftWifiTypes';

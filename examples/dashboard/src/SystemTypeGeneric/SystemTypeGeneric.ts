@@ -1,9 +1,9 @@
 import { RaftSubscribeForUpdatesCBType, RaftSystemType } from "../../../../src/RaftSystemType";
-import { RaftEventFn, RaftLog, RaftOKFail, RaftPublishEvent, RaftPublishEventNames, RaftSystemUtils } from "../../../../src/main";
+import { inspectPublishFrame, RaftEventFn, RaftLog, RaftPublishEvent, RaftPublishEventNames, RaftSubscriptionUpdateResponse, RaftSystemUtils } from "../../../../src/main";
 import { StateInfoGeneric } from "./StateInfoGeneric";
 import { DeviceManager } from "../../../../src/RaftDeviceManager";
 
-const SUBSCRIBE_BINARY_MSGS = false;
+const SUBSCRIBE_BINARY_MSGS = true;
 
 export default class SystemTypeGeneric implements RaftSystemType {
     nameForDialogs = "Generic System";
@@ -53,9 +53,15 @@ export default class SystemTypeGeneric implements RaftSystemType {
           ']}';
 
         const msgHandler = systemUtils.getMsgHandler();
-        const ricResp = await msgHandler.sendRICRESTCmdFrame<RaftOKFail>(
+        const ricResp = await msgHandler.sendRICRESTCmdFrame<RaftSubscriptionUpdateResponse>(
           enable ? subscribeEnable : subscribeDisable
         );
+
+        // Cache topic index->name map from response, then refresh from pubtopics endpoint when enabling
+        systemUtils.updatePublishTopicMapFromSubscriptionResponse(ricResp);
+        if (enable) {
+          await systemUtils.refreshPublishTopicMap();
+        }
 
         // Debug
         RaftLog.debug(`subscribe enable/disable returned ${JSON.stringify(ricResp)}`);
@@ -72,13 +78,41 @@ export default class SystemTypeGeneric implements RaftSystemType {
 
       // RICLog.debug(`rxOtherMsgType payload ${RaftUtils.bufferToHex(payload)}`);
       RaftLog.verbose(`rxOtherMsgType payloadLen ${payload.length}`);
-      const topicIDs = this._stateInfo.updateFromMsg(payload, frameTimeMs, SUBSCRIBE_BINARY_MSGS);
+
+      const frameMeta = inspectPublishFrame(payload, (idx) => this._systemUtils?.getPublishTopicName(idx));
+      let handledByDeviceManager = false;
+
+      if (frameMeta.frameType === "binary") {
+        if (frameMeta.binaryHasEnvelope) {
+          if (frameMeta.topicName === "devbin") {
+            this._stateInfo.handleBinaryPayload(payload);
+            handledByDeviceManager = true;
+          }
+        } else if (SUBSCRIBE_BINARY_MSGS) {
+          this._stateInfo.handleBinaryPayload(payload);
+          handledByDeviceManager = true;
+        }
+      } else if (frameMeta.frameType === "json") {
+        if (frameMeta.topicName === "devjson" || frameMeta.topicName === undefined) {
+          if (frameMeta.jsonString !== undefined) {
+            this._stateInfo.handleJsonPayload(frameMeta.jsonString);
+            handledByDeviceManager = true;
+          }
+        }
+      }
+
+      const topicIDs = frameMeta.topicIndex !== undefined ? [frameMeta.topicIndex.toString()] : [];
 
       // Call event handler if registered
       if (this._onEvent) {
         this._onEvent("pub", RaftPublishEvent.PUBLISH_EVENT_DATA, RaftPublishEventNames[RaftPublishEvent.PUBLISH_EVENT_DATA],
           {
             topicIDs: topicIDs,
+            topicName: frameMeta.topicName,
+            topicIndex: frameMeta.topicIndex,
+            topicVersion: frameMeta.version,
+            frameType: frameMeta.frameType,
+            handledByDeviceManager,
             payload: payload,
             frameTimeMs: frameTimeMs,
             isBinary: SUBSCRIBE_BINARY_MSGS

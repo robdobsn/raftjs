@@ -80,8 +80,8 @@ const DeviceActionsForm: React.FC<DeviceActionsTableProps> = ({ deviceKey }: Dev
                                     <td>{action.n}</td>
                                     <td colSpan={2}>
                                         <DispLEDGrid
-                                            rows={action.NY || 1}
-                                            cols={action.NX || 1}
+                                            rows={action.NY ?? 1}
+                                            cols={action.NX ?? 1}
                                             deviceKey={deviceKey}
                                             deviceAction={action}
                                         />

@@ -357,9 +357,9 @@ export default class RaftChannelSimulated implements RaftChannel {
     // Convert the buffer to a byte array
     const dataBytes = new Uint8Array(dataBuffer);
 
-    // Create the JSON message structure
+    // Create the JSON message structure (bus key is numeric string to match firmware convention)
     const message = {
-      "BUS1": {
+      "1": {
         [deviceName]: {
           "_t": deviceTypeInfo.type,
           "_o": 1,  // Device is online
@@ -464,7 +464,8 @@ export default class RaftChannelSimulated implements RaftChannel {
     const hotspotRow = (Math.sin(hotspotPhase) + 1) * (rows - 1) / 2;
     const hotspotCol = (Math.cos(hotspotPhase) + 1) * (cols - 1) / 2;
     const hotspotAmplitude = 6;
-    const sigma = Math.max(rows, cols) / 3 || 1;
+    const rawSigma = Math.max(rows, cols) / 3;
+    const sigma = Number.isFinite(rawSigma) ? rawSigma : 1;
 
     for (let idx = 0; idx < repeatCount; idx++) {
       const row = Math.floor(idx / cols);
