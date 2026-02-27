@@ -1,5 +1,5 @@
 import RaftDeviceMgrIF from "../../../../src/RaftDeviceMgrIF";
-import { DeviceAttributeState, DevicesState, DeviceState } from "../../../../src/RaftDeviceStates";
+import { DeviceAttributeState, DevicesState, DeviceState, DeviceOnlineState } from '../../../../src/RaftDeviceStates';
 import { RICSERIAL_PAYLOAD_POS } from "../../../../src/RaftProtocolDefs";
 import RICAddOnManager from "./RICAddOnManager";
 import RICCommsStats from "./RICCommsStats";
@@ -50,7 +50,7 @@ export class RICStateInfo implements RaftDeviceMgrIF {
             deviceAttributes: {},
             deviceIsNew: false,
             stateChanged: false,
-            isOnline: false,
+            onlineState: DeviceOnlineState.Offline,
             deviceAddress: "",
             deviceType: "",
             busName: ""
@@ -82,6 +82,14 @@ export class RICStateInfo implements RaftDeviceMgrIF {
     }
 
     removeAttributeDataCallback(callback: (deviceKey: string, attrState: DeviceAttributeState) => void): void {
+        // TODO - implement if RICStateInfo is to be used as a DeviceMgr
+    }
+
+    addDeviceRemovedCallback(callback: (deviceKey: string, state: DeviceState) => void): void {
+        // TODO - implement if RICStateInfo is to be used as a DeviceMgr
+    }
+
+    removeDeviceRemovedCallback(callback: (deviceKey: string, state: DeviceState) => void): void {
         // TODO - implement if RICStateInfo is to be used as a DeviceMgr
     }
 

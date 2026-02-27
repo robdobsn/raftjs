@@ -41,6 +41,17 @@ export default function DevicesPanel(props: DevicesPanelProps) {
         }
         deviceManager.addAttributeDataCallback(onNewAttributeData);
 
+        const onDeviceRemoved = (deviceKey: string, state: DeviceState) => {
+            setLastUpdated(Date.now());
+        };
+        deviceManager.addDeviceRemovedCallback(onDeviceRemoved);
+
+        return () => {
+            deviceManager.removeNewDeviceCallback(onNewDevice);
+            deviceManager.removeNewAttributeCallback(onNewAttribute);
+            deviceManager.removeAttributeDataCallback(onNewAttributeData);
+            deviceManager.removeDeviceRemovedCallback(onDeviceRemoved);
+        };
     }, []);
 
     const deviceManager = connManager.getConnector().getSystemType()?.deviceMgrIF;

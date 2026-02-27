@@ -7,7 +7,7 @@
 //
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-import { DeviceAttributeState, DeviceAttributesState, DevicesState, DeviceState, DeviceStats, formatDeviceAddrHex, getDeviceKey, parseDeviceKey } from "./RaftDeviceStates";
+import { DeviceAttributeState, DeviceAttributesState, DevicesState, DeviceState, DeviceStats, DeviceOnlineState, formatDeviceAddrHex, getDeviceKey, parseDeviceKey } from "./RaftDeviceStates";
 import { DeviceMsgJson } from "./RaftDeviceMsg";
 import { RaftOKFail } from './RaftTypes';
 import { DeviceTypeInfo, DeviceTypeAction, DeviceTypeInfoRecs, RaftDevTypeInfoResponse } from "./RaftDeviceInfo";
@@ -62,6 +62,7 @@ export class DeviceManager implements RaftDeviceMgrIF{
     private _newDeviceAttributeCallbacks: Array<(deviceKey: string, attrState: DeviceAttributeState) => void> = [];
     private _newAttributeDataCallbacks: Array<(deviceKey: string, attrState: DeviceAttributeState) => void> = [];
     private _decodedDataCallbacks: Array<(decoded: DeviceDecodedData) => void> = [];
+    private _deviceRemovedCallbacks: Array<(deviceKey: string, state: DeviceState) => void> = [];
 
     // Debug message index (to help debug with async messages)
     private _debugMsgIndex = 0;
@@ -185,6 +186,16 @@ export class DeviceManager implements RaftDeviceMgrIF{
         this._decodedDataCallbacks = this._decodedDataCallbacks.filter((cb) => cb !== callback);
     }
 
+    public addDeviceRemovedCallback(callback: (deviceKey: string, state: DeviceState) => void): void {
+        if (!this._deviceRemovedCallbacks.includes(callback)) {
+            this._deviceRemovedCallbacks.push(callback);
+        }
+    }
+
+    public removeDeviceRemovedCallback(callback: (deviceKey: string, state: DeviceState) => void): void {
+        this._deviceRemovedCallbacks = this._deviceRemovedCallbacks.filter((cb) => cb !== callback);
+    }
+
     ////////////////////////////////////////////////////////////////////////////
     // Set the friendly name for the device
     ////////////////////////////////////////////////////////////////////////////
@@ -212,7 +223,7 @@ export class DeviceManager implements RaftDeviceMgrIF{
         //
         // Then zero or more per-device records, concatenated back-to-back:
         //   Bytes 0-1:  recordLen    uint16 big-endian — number of body bytes that follow (min 7)
-        //   Byte  2:    busInfo      bit 7 = online flag, bits 6:0 = bus number (0 = direct)
+        //   Byte  2:    statusBus    bit 7 = online flag, bit 6 = pending deletion, bits 5:4 = reserved, bits 3:0 = bus number (0-15)
         //   Bytes 3-6:  address      uint32 big-endian — device address on the bus
         //   Bytes 7-8:  devTypeIdx   uint16 big-endian — device type table index
         //   Bytes 9+:   pollData     variable length (recordLen − 7 bytes) — device data
@@ -240,7 +251,7 @@ export class DeviceManager implements RaftDeviceMgrIF{
         const devbinMagicMin = 0xDB;
         const devbinMagicMax = 0xDF;
         const recordLenLen = 2; // Per-record length prefix (uint16 big-endian)
-        const busInfoLen = 1; // busInfo byte: bit 7 = online, bits 6:0 = bus number
+        const busInfoLen = 1; // statusBus byte: bit 7 = online, bit 6 = pending deletion, bits 3:0 = bus number
         const deviceAddrLen = 4; // Device address (uint32 big-endian)
         const devTypeIdxLen = 2; // Device type index (uint16 big-endian)
         const recordHeaderLen = busInfoLen + deviceAddrLen + devTypeIdxLen; // = 7, minimum record body
@@ -291,9 +302,11 @@ export class DeviceManager implements RaftDeviceMgrIF{
             // Extract record header fields
             let recordPos = msgPos + recordLenLen;
 
-            // busInfo byte: bit 7 = online, bits 6:0 = bus number
-            const busNum = rxMsg[recordPos] & 0x7f;
-            const isOnline = (rxMsg[recordPos] & 0x80) !== 0;
+            // statusBus byte: bit 7 = online, bit 6 = pending deletion, bits 3:0 = bus number
+            const statusByte = rxMsg[recordPos];
+            const busNum = statusByte & 0x0f;
+            const isOnline = (statusByte & 0x80) !== 0;
+            const isPendingDeletion = (statusByte & 0x40) !== 0;
             recordPos += busInfoLen;
 
             // Device address (uint32 big-endian)
@@ -314,6 +327,13 @@ export class DeviceManager implements RaftDeviceMgrIF{
 
             // Update the last update time
             this._deviceLastUpdateTime[deviceKey] = Date.now();
+
+            // Handle pending deletion - remove device and skip further processing
+            if (isPendingDeletion) {
+                this.removeDevice(deviceKey);
+                msgPos += recordLenLen + recordLen;
+                continue;
+            }
 
             // Check if a device state already exists
             if (!(deviceKey in this._devicesState) || (this._devicesState[deviceKey].deviceTypeInfo === undefined)) {
@@ -352,7 +372,7 @@ export class DeviceManager implements RaftDeviceMgrIF{
                         deviceAttributes: {},
                         deviceIsNew: true,
                         stateChanged: false,
-                        isOnline: true,
+                        onlineState: DeviceOnlineState.Online,
                         deviceAddress: devAddrHex,
                         deviceType: deviceTypeInfo?.name || "",
                         busName: busNum.toString()
@@ -362,7 +382,7 @@ export class DeviceManager implements RaftDeviceMgrIF{
 
             // Get device state
             const deviceState = this._devicesState[deviceKey];
-            deviceState.isOnline = isOnline;
+            deviceState.onlineState = isOnline ? DeviceOnlineState.Online : DeviceOnlineState.Offline;
             
             // Check if device type info is available and complete
             if (deviceState.deviceTypeInfo && deviceState.deviceTypeInfo.resp) {
@@ -519,7 +539,7 @@ export class DeviceManager implements RaftDeviceMgrIF{
                             deviceAttributes: {},
                             deviceIsNew: true,
                             stateChanged: false,
-                            isOnline: true,
+                            onlineState: DeviceOnlineState.Online,
                             deviceAddress: devAddr,
                             deviceType: deviceTypeName,
                             busName: busName
@@ -530,9 +550,15 @@ export class DeviceManager implements RaftDeviceMgrIF{
                 // Get device state
                 const deviceState = this._devicesState[deviceKey];
 
-                // Check for online/offline state information
+                // Check for online/offline/pending-deletion state information
                 if (attrGroups && typeof attrGroups === "object" && "_o" in attrGroups) {
-                    deviceState.isOnline = ((attrGroups._o === true) || (attrGroups._o === "1") || (attrGroups._o === 1));
+                    const onlineStateVal = typeof attrGroups._o === 'number' ? attrGroups._o : parseInt(String(attrGroups._o), 10);
+                    if (onlineStateVal === 2) {
+                        // Pending deletion - remove device and skip further processing
+                        this.removeDevice(deviceKey);
+                        return;
+                    }
+                    deviceState.onlineState = onlineStateVal === 1 ? DeviceOnlineState.Online : DeviceOnlineState.Offline;
                 }
 
                 // Check if device type info is available
@@ -631,6 +657,22 @@ export class DeviceManager implements RaftDeviceMgrIF{
                 }
             });
         });
+    }
+
+    ////////////////////////////////////////////////////////////////////////////
+    // Remove a device (e.g. on pending deletion)
+    ////////////////////////////////////////////////////////////////////////////
+
+    private removeDevice(deviceKey: string): void {
+        // Snapshot the state before removal for callbacks
+        const deviceState = this._devicesState[deviceKey];
+        if (deviceState) {
+            deviceState.onlineState = DeviceOnlineState.PendingDeletion;
+            this._deviceRemovedCallbacks.forEach((cb) => cb(deviceKey, deviceState));
+        }
+        delete this._devicesState[deviceKey];
+        delete this._deviceLastUpdateTime[deviceKey];
+        delete this._deviceStats[deviceKey];
     }
 
     ////////////////////////////////////////////////////////////////////////////

@@ -78,14 +78,20 @@ export interface DeviceStats {
     lastSampleTimeMs: number | null;
     lastUpdateTimeMs: number | null;
 }
-    
+
+export enum DeviceOnlineState {
+    Offline = 0,
+    Online = 1,
+    PendingDeletion = 2,
+}
+
 export interface DeviceState {
     deviceTypeInfo: DeviceTypeInfo | undefined;
     deviceTimeline: DeviceTimeline;
     deviceAttributes: DeviceAttributesState;
     deviceIsNew: boolean;
     stateChanged: boolean;
-    isOnline: boolean;
+    onlineState: DeviceOnlineState;
     deviceAddress: string;
     deviceType: string;
     busName: string;

@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import './styles.css';
-import { DeviceState } from '../../../src/RaftDeviceStates';
+import { DeviceState, DeviceOnlineState } from '../../../src/RaftDeviceStates';
 import DeviceAttrsForm from './DeviceAttrsForm';
 import DeviceActionsForm from './DeviceActionsForm';
 import DeviceLineChart from './DeviceLineChart';
@@ -20,7 +20,7 @@ const DevicePanel = ({ deviceKey, lastUpdated }: DevicePanelProps) => {
     const deviceState: DeviceState | undefined = deviceManager?.getDeviceState(deviceKey);
 
     // Gray out the device panel if the device is offline
-    const offlineClass = deviceState?.isOnline ? '' : 'offline';
+    const offlineClass = deviceState?.onlineState === DeviceOnlineState.Online ? '' : 'offline';
 
     const [timedChartUpdate, setTimedChartUpdate] = useState<number>(0);
     const [menuOpen, setMenuOpen] = useState<boolean>(false);
@@ -173,7 +173,7 @@ const DevicePanel = ({ deviceKey, lastUpdated }: DevicePanelProps) => {
     if (bracketsAdded) {
         headerText += `)`;
     }
-    if (!deviceState?.isOnline) {
+    if (deviceState?.onlineState !== DeviceOnlineState.Online) {
         headerText += " (Offline)";
     }
 

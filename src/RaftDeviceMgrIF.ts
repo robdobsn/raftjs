@@ -28,6 +28,8 @@ export default interface RaftDeviceMgrIF {
     removeNewAttributeCallback(callback: (deviceKey: string, attrState: DeviceAttributeState) => void): void;
     addAttributeDataCallback(callback: (deviceKey: string, attrState: DeviceAttributeState) => void): void;
     removeAttributeDataCallback(callback: (deviceKey: string, attrState: DeviceAttributeState) => void): void;
+    addDeviceRemovedCallback(callback: (deviceKey: string, state: DeviceState) => void): void;
+    removeDeviceRemovedCallback(callback: (deviceKey: string, state: DeviceState) => void): void;
 
     // Send action to device
     sendAction(deviceKey: string, action: DeviceTypeAction, data: number[]): void;
