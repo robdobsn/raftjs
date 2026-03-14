@@ -37,7 +37,7 @@ export default class AttributeHandler {
         const msgDataStartIdx = msgBufIdx;
 
         // New attribute values (in order as they appear in the attributes JSON)
-        let newAttrValues: number[][] = [];
+        let newAttrValues: (number | string)[][] = [];
         if ("c" in pollRespMetadata) {
 
             // Extract attribute values using custom handler
@@ -201,7 +201,7 @@ export default class AttributeHandler {
         }
     }
 
-    private processMsgAttribute(attrDef: DeviceTypeAttribute, msgBuffer: Uint8Array, msgBufIdx: number, msgDataStartIdx: number): { values: number[], newMsgBufIdx: number} {
+    private processMsgAttribute(attrDef: DeviceTypeAttribute, msgBuffer: Uint8Array, msgBufIdx: number, msgDataStartIdx: number): { values: (number | string)[], newMsgBufIdx: number} {
 
         // Current field message string index
         let curFieldBufIdx = msgBufIdx;
@@ -253,10 +253,13 @@ export default class AttributeHandler {
 
         // Extract the value using python-struct
         const unpackValues = structUnpack(maskOnSignedValue ? attrTypesOnly.toUpperCase() : attrTypesOnly, attrBuf);
-        let attrValues = unpackValues as number[];
+        let attrValues = unpackValues as (number | string)[];
 
         // Get number of bytes consumed
         const numBytesConsumed = structSizeOf(attrTypesOnly);
+
+        // Check if any values are strings (from 's' format) — skip numeric transforms for those
+        const hasStringValues = attrValues.some(v => typeof v === 'string');
 
         // // Check if sign extendable mask specified on signed value
         // if (mmSpecifiedOnSignedValue) {
@@ -270,57 +273,57 @@ export default class AttributeHandler {
         // }
 
         // Check for XOR mask
-        if ("x" in attrDef) {
+        if (!hasStringValues && "x" in attrDef) {
             const mask = typeof attrDef.x === "string" ? parseInt(attrDef.x, 16) : attrDef.x as number;
-            attrValues = attrValues.map((value) => (value >>> 0) ^ mask);
+            attrValues = attrValues.map((value) => ((value as number) >>> 0) ^ mask);
         }
         
         // Check for AND mask
-        if ("m" in attrDef) {
+        if (!hasStringValues && "m" in attrDef) {
             const mask = typeof attrDef.m === "string" ? parseInt(attrDef.m, 16) : attrDef.m as number;
-            attrValues = attrValues.map((value) => (maskOnSignedValue ? this.signExtend(value, mask) : (value >>> 0) & mask));
+            attrValues = attrValues.map((value) => (maskOnSignedValue ? this.signExtend(value as number, mask) : ((value as number) >>> 0) & mask));
         }
 
         // Check for a sign-bit
-        if ("sb" in attrDef) {
+        if (!hasStringValues && "sb" in attrDef) {
             const signBitPos = attrDef.sb as number;
             const signBitMask = 1 << signBitPos;
             if ("ss" in attrDef) {
                 const signBitSubtract = attrDef.ss as number;
-                attrValues = attrValues.map((value) => (value & signBitMask) ? signBitSubtract - value : value);
+                attrValues = attrValues.map((value) => ((value as number) & signBitMask) ? signBitSubtract - (value as number) : value);
             } else {
-                attrValues = attrValues.map((value) => (value & signBitMask) ? value - (signBitMask << 1) : value);
+                attrValues = attrValues.map((value) => ((value as number) & signBitMask) ? (value as number) - (signBitMask << 1) : value);
             }
         }
 
         // Check for bit shift required
-        if ("s" in attrDef && attrDef.s) {
+        if (!hasStringValues && "s" in attrDef && attrDef.s) {
             const bitshift = attrDef.s as number;
             if (bitshift > 0) {
-                attrValues = attrValues.map((value) => (value >>> 0) >>> bitshift);
+                attrValues = attrValues.map((value) => ((value as number) >>> 0) >>> bitshift);
             } else if (bitshift < 0) {
-                attrValues = attrValues.map((value) => (value >>> 0) << -bitshift);
+                attrValues = attrValues.map((value) => ((value as number) >>> 0) << -bitshift);
             }
         }
 
         // Check for divisor
-        if ("d" in attrDef && attrDef.d) {
+        if (!hasStringValues && "d" in attrDef && attrDef.d) {
             const divisor = attrDef.d as number;
-            attrValues = attrValues.map((value) => (value) / divisor);
+            attrValues = attrValues.map((value) => (value as number) / divisor);
         }
 
         // Check for value to add
-        if ("a" in attrDef && attrDef.a !== undefined) {
+        if (!hasStringValues && "a" in attrDef && attrDef.a !== undefined) {
             const addValue = attrDef.a as number;
-            attrValues = attrValues.map((value) => (value) + addValue);
+            attrValues = attrValues.map((value) => (value as number) + addValue);
         }
 
         // Apply lookup table if defined
-        if ("lut" in attrDef && attrDef.lut !== undefined) {
+        if (!hasStringValues && "lut" in attrDef && attrDef.lut !== undefined) {
             attrValues = attrValues.map((value): number => {
                 // Skip NaN values
-                if (isNaN(value)) {
-                    return value;
+                if (isNaN(value as number)) {
+                    return value as number;
                 }
 
                 // Search through the lookup table rows for a match
@@ -334,7 +337,7 @@ export default class AttributeHandler {
                     }
                     
                     // Parse the range string
-                    if (this.isValueInRangeString(value, row.r)) {
+                    if (this.isValueInRangeString(value as number, row.r)) {
                         return row.v;
                     }
                 }
@@ -345,7 +348,7 @@ export default class AttributeHandler {
                 }
                 
                 // Otherwise keep the original value
-                return value;
+                return value as number;
             });
         }
 

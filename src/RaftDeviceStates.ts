@@ -14,10 +14,14 @@ export function deviceAttrGetLatestFormatted(attrState: DeviceAttributeState): s
     if (attrState.values.length === 0) {
         return 'N/A';
     }
-    if (attrState.format.length === 0) {
-        return attrState.values[attrState.values.length - 1].toString();
-    }
     const value = attrState.values[attrState.values.length - 1];
+    // String values are returned directly
+    if (typeof value === 'string') {
+        return value;
+    }
+    if (attrState.format.length === 0) {
+        return value.toString();
+    }
     let format = attrState.format;
     if (format.startsWith("%")) {
         format = format.slice(1);
@@ -52,7 +56,7 @@ export interface DeviceAttributeState {
     newAttribute: boolean;
     newData: boolean;
     numNewValues: number;
-    values: number[];
+    values: (number | string)[];
     units: string;
     range: number[];
     format: string;

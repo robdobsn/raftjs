@@ -47,13 +47,15 @@ const DeviceLineChart: React.FC<DeviceLineChartProps> = memo(({ deviceKey, lastU
         datasets: []
     });
 
+    const [chartScales, setChartScales] = useState<{ [key: string]: any }>({});
+
     const options = {
         responsive: true,
         maintainAspectRatio: false,
         animation: {
             duration: 1, // default is 1000ms
         },
-        scales: {}
+        scales: chartScales
     };
 
     const colourMapRef = useRef<{ [key: string]: string }>({
@@ -100,7 +102,12 @@ const DeviceLineChart: React.FC<DeviceLineChartProps> = memo(({ deviceKey, lastU
 
         const uniqueAxes = new Map<string, { range: [number, number], units: string }>();
         const datasets = Object.entries(deviceState.deviceAttributes)
-            .filter(([attributeName, attributeDetails]) => attributeDetails.visibleSeries !== false)
+            .filter(([attributeName, attributeDetails]) => {
+                if (attributeDetails.visibleSeries === false) return false;
+                // Exclude string-valued attributes from chart
+                if (attributeDetails.values.length > 0 && typeof attributeDetails.values[attributeDetails.values.length - 1] === 'string') return false;
+                return true;
+            })
             .map(([attributeName, attributeDetails]) => {
                 const data = attributeDetails.values.slice(-maxChartDataPoints);
                 let colour = colourMapRef.current[attributeName];
@@ -140,12 +147,18 @@ const DeviceLineChart: React.FC<DeviceLineChartProps> = memo(({ deviceKey, lastU
                 ticks: {
                     min: axis.range[0],
                     max: axis.range[1],
+                    callback: (value: number) => {
+                        if (typeof value === 'number' && Math.abs(value) > 0 && Math.abs(value) < 1) {
+                            return value.toPrecision(2);
+                        }
+                        return value;
+                    },
                 },
             };
         });
 
         // Update options and chart data
-        options.scales = scales;
+        setChartScales(scales);
         setChartData({ labels: labels.length ? labels : ['0.000'], datasets });
     }, [lastUpdated]);
 

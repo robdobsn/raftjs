@@ -23,7 +23,7 @@ export interface DeviceDecodedData {
     deviceAddress: string;
     deviceType: string;
     attrGroupName?: string;
-    attrValues: Record<string, number[]>;
+    attrValues: Record<string, (number | string)[]>;
     timestampsUs: number[];
     markers?: Record<string, unknown>;
     fromOfflineBuffer?: boolean;
@@ -956,7 +956,7 @@ export class DeviceManager implements RaftDeviceMgrIF{
             return;
         }
 
-        const attrValues: Record<string, number[]> = {};
+        const attrValues: Record<string, (number | string)[]> = {};
         let hasValues = false;
 
         pollRespMetadata.a.forEach((attr) => {

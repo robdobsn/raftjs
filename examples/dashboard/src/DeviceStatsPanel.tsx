@@ -1,8 +1,10 @@
-import React from 'react';
+import React, { useRef } from 'react';
 import ConnManager from './ConnManager';
 import './styles.css';
 
 const connManager = ConnManager.getInstance();
+
+const LAST_SAMPLE_AVG_COUNT = 5;
 
 export interface DeviceStatsPanelProps {
     deviceKey: string;
@@ -12,6 +14,7 @@ export interface DeviceStatsPanelProps {
 const DeviceStatsPanel: React.FC<DeviceStatsPanelProps> = ({ deviceKey, lastUpdated }: DeviceStatsPanelProps) => {
     const deviceManager = connManager.getConnector().getSystemType()?.deviceMgrIF;
     const stats = deviceManager?.getDeviceStats(deviceKey);
+    const recentAgesRef = useRef<number[]>([]);
 
     if (!stats) {
         return <></>;
@@ -19,10 +22,18 @@ const DeviceStatsPanel: React.FC<DeviceStatsPanelProps> = ({ deviceKey, lastUpda
 
     const windowSeconds = stats.windowMs / 1000;
     const sampleRateHz = Number.isFinite(stats.sampleRateHz) ? stats.sampleRateHz : 0;
-    const nowMs = lastUpdated || Date.now();
-    const lastSampleAgeSec = stats.lastSampleTimeMs
-        ? (nowMs - stats.lastSampleTimeMs) / 1000
-        : null;
+    const nowMs = Math.max(lastUpdated || 0, Date.now());
+
+    let lastSampleAgeMs: number | null = null;
+    if (stats.lastSampleTimeMs) {
+        const ageMs = nowMs - stats.lastSampleTimeMs;
+        const ages = recentAgesRef.current;
+        ages.push(ageMs);
+        if (ages.length > LAST_SAMPLE_AVG_COUNT) {
+            ages.shift();
+        }
+        lastSampleAgeMs = ages.reduce((sum, v) => sum + v, 0) / ages.length;
+    }
 
     const handleReset = () => {
         deviceManager?.resetDeviceStats(deviceKey);
@@ -54,7 +65,7 @@ const DeviceStatsPanel: React.FC<DeviceStatsPanelProps> = ({ deviceKey, lastUpda
                 <div className="device-stats-item">
                     <div className="device-stats-label">Last Sample</div>
                     <div className="device-stats-value">
-                        {lastSampleAgeSec === null ? 'N/A' : `${lastSampleAgeSec.toFixed(1)} s ago`}
+                        {lastSampleAgeMs === null ? 'N/A' : `${lastSampleAgeMs.toFixed(0)} ms ago`}
                     </div>
                 </div>
             </div>
