@@ -86,17 +86,21 @@ export default class CustomAttrHandler {
                 i++;
             }
         } else if (customFnDef.n === "lsm6ds_fifo") {
-            // FIFO_STATUS1 (buf[0]) = DIFF_FIFO[7:0], FIFO_STATUS2 (buf[1]):
-            //   bit7=WTM, bit6=OVER_RUN, bit5=FIFO_FULL, bit4=FIFO_EMPTY, bits3:0=DIFF_FIFO[11:8]
+            // FIFO_STATUS1/2 (buf[0:2]): word count in bits[11:0]
+            // FIFO_STATUS3/4 (buf[2:4]): pattern counter in bits[9:0] (position in gx,gy,gz,ax,ay,az cycle)
             const wordCount = ((buf[1] & 0x0f) << 8) | buf[0];
+            const pattern = ((buf[3] & 0x03) << 8) | buf[2];
             const fifoFull = (buf[1] & 0x60) !== 0; // OVER_RUN or FIFO_FULL
 
-            // Max samples that fit in the payload after the 2-byte FIFO status
-            const maxSamplesFromBuf = Math.floor(Math.max(0, buf.length - 2) / 12);
+            // Skip words to reach next aligned group boundary (gx start)
+            const skip = (6 - (pattern % 6)) % 6;
+
+            // Max samples that fit in the payload after the 4-byte FIFO status + skipped words
+            const maxSamplesFromBuf = Math.floor(Math.max(0, buf.length - 4 - skip * 2) / 12);
 
             let sampleCount: number;
             if (wordCount > 0) {
-                sampleCount = Math.min(Math.floor(wordCount / 6), 16, maxSamplesFromBuf);
+                sampleCount = Math.min(Math.floor((wordCount - skip) / 6), 16, maxSamplesFromBuf);
             } else if (fifoFull) {
                 // LSM6DS3 quirk: DIFF_FIFO wraps to 0 when FIFO is full (4096 words, 12-bit counter)
                 sampleCount = Math.min(16, maxSamplesFromBuf);
@@ -104,11 +108,9 @@ export default class CustomAttrHandler {
                 // Genuinely empty
                 return attrValueVecs;
             }
+            if (sampleCount < 1) sampleCount = 0;
 
-            // Debug: log what the decoder sees
-            console.log(`lsm6ds_fifo: bufLen=${buf.length} status=[0x${buf[0].toString(16).padStart(2,'0')},0x${buf[1].toString(16).padStart(2,'0')}] wc=${wordCount} full=${fifoFull} samples=${sampleCount}`);
-
-            let k = 2;
+            let k = 4 + skip * 2;
             for (let i = 0; i < sampleCount; i++) {
                 if (attrValues["gx"]) attrValues["gx"].push(this.toInt16(buf[k], buf[k + 1]));
                 if (attrValues["gy"]) attrValues["gy"].push(this.toInt16(buf[k + 2], buf[k + 3]));

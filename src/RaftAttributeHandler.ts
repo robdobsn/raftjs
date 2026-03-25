@@ -43,6 +43,20 @@ export default class AttributeHandler {
             // Extract attribute values using custom handler
             newAttrValues = this._customAttrHandler.handleAttr(pollRespMetadata, msgBuffer, msgBufIdx);
 
+            // Apply per-attribute transforms (divisor, addend) that the custom handler doesn't handle
+            for (let attrIdx = 0; attrIdx < pollRespMetadata.a.length && attrIdx < newAttrValues.length; attrIdx++) {
+                const attrDef = pollRespMetadata.a[attrIdx];
+                if (newAttrValues[attrIdx].length === 0) continue;
+                if ("d" in attrDef && attrDef.d) {
+                    const divisor = attrDef.d as number;
+                    newAttrValues[attrIdx] = newAttrValues[attrIdx].map(v => (v as number) / divisor);
+                }
+                if ("a" in attrDef && attrDef.a !== undefined) {
+                    const addend = attrDef.a as number;
+                    newAttrValues[attrIdx] = newAttrValues[attrIdx].map(v => (v as number) + addend);
+                }
+            }
+
         } else {
 
             // console.log(`RaftAttrHdlr.processMsgAttrGroup ${JSON.stringify(pollRespMetadata)} msgBufIdx ${msgBufIdx} timestampUs ${timestampUs}`);
