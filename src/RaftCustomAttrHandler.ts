@@ -22,6 +22,11 @@ type CustomAttrJsFn = (
 export default class CustomAttrHandler {
 
     private _jsFunctionCache = new Map<string, CustomAttrJsFn>();
+
+    private toInt16(lo: number, hi: number): number {
+        const u16 = (hi << 8) | lo;
+        return (u16 & 0x8000) ? (u16 - 0x10000) : u16;
+    }
     
     public handleAttr(pollRespMetadata: DeviceTypePollRespMetadata, msgBuffer: Uint8Array, msgBufIdx: number): number[][] {
 
@@ -45,8 +50,9 @@ export default class CustomAttrHandler {
             return attrValueVecs;
         }
 
-        // Provide the message buffer sliced to the data portion
-        const buf = msgBuffer.slice(msgBufIdx);
+        // Provide only this poll block (bounded by pollRespMetadata.b) to avoid
+        // decoding bytes that belong to subsequent records in the same frame.
+        const buf = msgBuffer.slice(msgBufIdx, msgBufIdx + numMsgBytes);
         if (buf.length < numMsgBytes) {
             return [];
         }
@@ -78,6 +84,39 @@ export default class CustomAttrHandler {
                 attrValues["IR"][attrValues["IR"].length - 1] = (buf[k + 3] << 16) | (buf[k + 4] << 8) | buf[k + 5];
                 k += 6;
                 i++;
+            }
+        } else if (customFnDef.n === "lsm6ds_fifo") {
+            // FIFO_STATUS1 (buf[0]) = DIFF_FIFO[7:0], FIFO_STATUS2 (buf[1]):
+            //   bit7=WTM, bit6=OVER_RUN, bit5=FIFO_FULL, bit4=FIFO_EMPTY, bits3:0=DIFF_FIFO[11:8]
+            const wordCount = ((buf[1] & 0x0f) << 8) | buf[0];
+            const fifoFull = (buf[1] & 0x60) !== 0; // OVER_RUN or FIFO_FULL
+
+            // Max samples that fit in the payload after the 2-byte FIFO status
+            const maxSamplesFromBuf = Math.floor(Math.max(0, buf.length - 2) / 12);
+
+            let sampleCount: number;
+            if (wordCount > 0) {
+                sampleCount = Math.min(Math.floor(wordCount / 6), 16, maxSamplesFromBuf);
+            } else if (fifoFull) {
+                // LSM6DS3 quirk: DIFF_FIFO wraps to 0 when FIFO is full (4096 words, 12-bit counter)
+                sampleCount = Math.min(16, maxSamplesFromBuf);
+            } else {
+                // Genuinely empty
+                return attrValueVecs;
+            }
+
+            // Debug: log what the decoder sees
+            console.log(`lsm6ds_fifo: bufLen=${buf.length} status=[0x${buf[0].toString(16).padStart(2,'0')},0x${buf[1].toString(16).padStart(2,'0')}] wc=${wordCount} full=${fifoFull} samples=${sampleCount}`);
+
+            let k = 2;
+            for (let i = 0; i < sampleCount; i++) {
+                if (attrValues["gx"]) attrValues["gx"].push(this.toInt16(buf[k], buf[k + 1]));
+                if (attrValues["gy"]) attrValues["gy"].push(this.toInt16(buf[k + 2], buf[k + 3]));
+                if (attrValues["gz"]) attrValues["gz"].push(this.toInt16(buf[k + 4], buf[k + 5]));
+                if (attrValues["ax"]) attrValues["ax"].push(this.toInt16(buf[k + 6], buf[k + 7]));
+                if (attrValues["ay"]) attrValues["ay"].push(this.toInt16(buf[k + 8], buf[k + 9]));
+                if (attrValues["az"]) attrValues["az"].push(this.toInt16(buf[k + 10], buf[k + 11]));
+                k += 12;
             }
         } else if (customFnDef.n === "gravity_o2_calc") {
             const key = 20.9 / 120.0;
