@@ -367,7 +367,8 @@ export class DeviceManager implements RaftDeviceMgrIF{
                         deviceTimeline: {
                             timestampsUs: [],
                             lastReportTimestampUs: 0,
-                            reportTimestampOffsetUs: 0
+                            reportTimestampOffsetUs: 0,
+                            totalSamplesAdded: 0
                         },
                         deviceAttributes: {},
                         deviceIsNew: true,
@@ -395,6 +396,7 @@ export class DeviceManager implements RaftDeviceMgrIF{
                 const pollDataStartPos = pollDataPos;
                 const attrLengthsBefore = this.snapshotAttrLengths(deviceState.deviceAttributes, pollRespMetadata);
                 const timelineLenBefore = deviceState.deviceTimeline.timestampsUs.length;
+                const totalSamplesBefore = deviceState.deviceTimeline.totalSamplesAdded;
                 while (pollDataPos < pollDataStartPos + pollDataLen) {
 
                     // Add bounds checking
@@ -434,7 +436,7 @@ export class DeviceManager implements RaftDeviceMgrIF{
                 this.emitDecodedData(deviceKey, busNum.toString(), devAddrHex, deviceState,
                     pollRespMetadata, attrLengthsBefore, timelineLenBefore);
 
-                const newSamples = deviceState.deviceTimeline.timestampsUs.length - timelineLenBefore;
+                const newSamples = deviceState.deviceTimeline.totalSamplesAdded - totalSamplesBefore;
                 this.updateDeviceStats(deviceKey, newSamples, Date.now());
             } else {
                 console.warn(`DevMan.handleClientMsgBinary debugIdx ${debugMsgIndex} deviceState incomplete for device ${deviceKey}, skipping attribute processing`);
@@ -534,7 +536,8 @@ export class DeviceManager implements RaftDeviceMgrIF{
                             deviceTimeline: {
                                 timestampsUs: [],
                                 lastReportTimestampUs: 0,
-                                reportTimestampOffsetUs: 0
+                                reportTimestampOffsetUs: 0,
+                                totalSamplesAdded: 0
                             },
                             deviceAttributes: {},
                             deviceIsNew: true,
@@ -592,6 +595,7 @@ export class DeviceManager implements RaftDeviceMgrIF{
 
                     const attrLengthsBefore = this.snapshotAttrLengths(deviceState.deviceAttributes, pollRespMetadata);
                     const timelineLenBefore = deviceState.deviceTimeline.timestampsUs.length;
+                    const totalSamplesBefore = deviceState.deviceTimeline.totalSamplesAdded;
 
                     // Loop
                     while (msgBufIdx < msgBytes.length) {
@@ -609,7 +613,7 @@ export class DeviceManager implements RaftDeviceMgrIF{
                     this.emitDecodedData(deviceKey, busName, devAddr, deviceState, pollRespMetadata,
                         attrLengthsBefore, timelineLenBefore, attrGroupName, markers);
 
-                    const newSamples = deviceState.deviceTimeline.timestampsUs.length - timelineLenBefore;
+                    const newSamples = deviceState.deviceTimeline.totalSamplesAdded - totalSamplesBefore;
                     this.updateDeviceStats(deviceKey, newSamples, Date.now());
                 });
             });

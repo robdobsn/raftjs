@@ -72,6 +72,7 @@ export interface DeviceTimeline {
     timestampsUs: number[];
     lastReportTimestampUs: number;
     reportTimestampOffsetUs: number;
+    totalSamplesAdded: number;
 }
 
 export interface DeviceStats {

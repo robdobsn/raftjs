@@ -158,6 +158,7 @@ export default class AttributeHandler {
 
         // Add the new timestamps
         deviceTimeline.timestampsUs.push(...timestampsUs);
+        deviceTimeline.totalSamplesAdded += numNewDataPoints;
 
         // Validate attributes based on the vft field
         this.validateAttributes(pollRespMetadata, devAttrsState, numNewDataPoints);
