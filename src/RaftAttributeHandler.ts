@@ -43,10 +43,23 @@ export default class AttributeHandler {
             // Extract attribute values using custom handler
             newAttrValues = this._customAttrHandler.handleAttr(pollRespMetadata, msgBuffer, msgBufIdx);
 
-            // Apply per-attribute transforms (divisor, addend) that the custom handler doesn't handle
+            // Apply per-attribute transforms that the custom handler doesn't handle
             for (let attrIdx = 0; attrIdx < pollRespMetadata.a.length && attrIdx < newAttrValues.length; attrIdx++) {
                 const attrDef = pollRespMetadata.a[attrIdx];
                 if (newAttrValues[attrIdx].length === 0) continue;
+
+                // Sign-extend values for signed types — the pseudocode produces unsigned
+                // values from bitwise operations, but the attribute type declares signedness
+                if (attrDef.t && isAttrTypeSigned(attrDef.t)) {
+                    const byteWidth = structSizeOf(attrDef.t);
+                    const signBit = 1 << (byteWidth * 8 - 1);
+                    const range = signBit * 2;
+                    newAttrValues[attrIdx] = newAttrValues[attrIdx].map(v => {
+                        const n = v as number;
+                        return (n & signBit) ? n - range : n;
+                    });
+                }
+
                 if ("d" in attrDef && attrDef.d) {
                     const divisor = attrDef.d as number;
                     newAttrValues[attrIdx] = newAttrValues[attrIdx].map(v => (v as number) / divisor);

@@ -8,6 +8,7 @@
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 import { CustomFunctionDefinition, DeviceTypePollRespMetadata } from "./RaftDeviceInfo";
+import { transpilePseudocodeToJs } from "./PseudocodeTranspiler";
 
 type CustomAttrJsFn = (
     buf: Uint8Array,
@@ -23,11 +24,6 @@ export default class CustomAttrHandler {
 
     private _jsFunctionCache = new Map<string, CustomAttrJsFn>();
 
-    private toInt16(lo: number, hi: number): number {
-        const u16 = (hi << 8) | lo;
-        return (u16 & 0x8000) ? (u16 - 0x10000) : u16;
-    }
-    
     public handleAttr(pollRespMetadata: DeviceTypePollRespMetadata, msgBuffer: Uint8Array, msgBufIdx: number): number[][] {
 
         // Number of bytes in each message
@@ -57,88 +53,37 @@ export default class CustomAttrHandler {
             return [];
         }
 
-        // Execute supplied JS implementation if provided
-        if (customFnDef.j && customFnDef.j.trim().length > 0) {
-            const jsFn = this.getOrCompileJsFunction(customFnDef);
-            if (!jsFn) {
-                return attrValueVecs;
-            }
-            try {
-                jsFn(buf, attrValues, attrValueVecs, pollRespMetadata, msgBuffer, msgBufIdx, numMsgBytes);
-            } catch (err) {
-                console.error(`CustomAttrHandler JS function ${customFnDef.n} execution failed`, err);
-            }
+        const fn = this.getOrCompileFunction(customFnDef);
+        if (!fn) {
             return attrValueVecs;
         }
 
-        // Custom code for each device type handled natively
-        if (customFnDef.n === "max30101_fifo") {
-            // Generated code ...
-            const N = (buf[0] + 32 - buf[2]) % 32;
-            let k = 3;
-            let i = 0;
-            while (i < N) {
-                attrValues["Red"].push(0);
-                attrValues["Red"][attrValues["Red"].length - 1] = (buf[k] << 16) | (buf[k + 1] << 8) | buf[k + 2];
-                attrValues["IR"].push(0);
-                attrValues["IR"][attrValues["IR"].length - 1] = (buf[k + 3] << 16) | (buf[k + 4] << 8) | buf[k + 5];
-                k += 6;
-                i++;
-            }
-        } else if (customFnDef.n === "lsm6ds_fifo") {
-            // FIFO_STATUS1/2 (buf[0:2]): word count in bits[11:0]
-            // FIFO_STATUS3/4 (buf[2:4]): pattern counter in bits[9:0] (position in gx,gy,gz,ax,ay,az cycle)
-            const wordCount = ((buf[1] & 0x0f) << 8) | buf[0];
-            const pattern = ((buf[3] & 0x03) << 8) | buf[2];
-            const fifoFull = (buf[1] & 0x60) !== 0; // OVER_RUN or FIFO_FULL
-
-            // Skip words to reach next aligned group boundary (gx start)
-            const skip = (6 - (pattern % 6)) % 6;
-
-            // Max samples that fit in the payload after the 4-byte FIFO status + skipped words
-            const maxSamplesFromBuf = Math.floor(Math.max(0, buf.length - 4 - skip * 2) / 12);
-
-            let sampleCount: number;
-            if (wordCount > 0) {
-                sampleCount = Math.min(Math.floor((wordCount - skip) / 6), 16, maxSamplesFromBuf);
-            } else if (fifoFull) {
-                // LSM6DS3 quirk: DIFF_FIFO wraps to 0 when FIFO is full (4096 words, 12-bit counter)
-                sampleCount = Math.min(16, maxSamplesFromBuf);
-            } else {
-                // Genuinely empty
-                return attrValueVecs;
-            }
-            if (sampleCount < 1) sampleCount = 0;
-
-            let k = 4 + skip * 2;
-            for (let i = 0; i < sampleCount; i++) {
-                if (attrValues["gx"]) attrValues["gx"].push(this.toInt16(buf[k], buf[k + 1]));
-                if (attrValues["gy"]) attrValues["gy"].push(this.toInt16(buf[k + 2], buf[k + 3]));
-                if (attrValues["gz"]) attrValues["gz"].push(this.toInt16(buf[k + 4], buf[k + 5]));
-                if (attrValues["ax"]) attrValues["ax"].push(this.toInt16(buf[k + 6], buf[k + 7]));
-                if (attrValues["ay"]) attrValues["ay"].push(this.toInt16(buf[k + 8], buf[k + 9]));
-                if (attrValues["az"]) attrValues["az"].push(this.toInt16(buf[k + 10], buf[k + 11]));
-                k += 12;
-            }
-        } else if (customFnDef.n === "gravity_o2_calc") {
-            const key = 20.9 / 120.0;
-            const val = key * (buf[0] + buf[1] / 10.0 + buf[2] / 100.0);
-            attrValues["oxygen"].push(val);
+        try {
+            fn(buf, attrValues, attrValueVecs, pollRespMetadata, msgBuffer, msgBufIdx, numMsgBytes);
+        } catch (err) {
+            console.error(`CustomAttrHandler function ${customFnDef.n} execution failed`, err);
         }
         return attrValueVecs;
     }
 
-    private getOrCompileJsFunction(customFnDef: CustomFunctionDefinition): CustomAttrJsFn | null {
-        if (!customFnDef.j) {
+    private getOrCompileFunction(customFnDef: CustomFunctionDefinition): CustomAttrJsFn | null {
+        // Prefer explicit JS if provided, otherwise transpile from pseudocode
+        let jsSource = customFnDef.j?.trim();
+        if (!jsSource && customFnDef.c) {
+            jsSource = transpilePseudocodeToJs(customFnDef.c);
+        }
+        if (!jsSource) {
             return null;
         }
-        const cacheKey = `${customFnDef.n}::${customFnDef.j}`;
-        const cachedFn = this._jsFunctionCache.get(cacheKey);
-        if (cachedFn) {
-            return cachedFn;
+
+        const cacheKey = `${customFnDef.n}::${jsSource}`;
+        const cached = this._jsFunctionCache.get(cacheKey);
+        if (cached) {
+            return cached;
         }
+
         try {
-            const compiledFn = new Function(
+            const fn = new Function(
                 "buf",
                 "attrValues",
                 "attrValueVecs",
@@ -146,12 +91,12 @@ export default class CustomAttrHandler {
                 "msgBuffer",
                 "msgBufIdx",
                 "numMsgBytes",
-                customFnDef.j
+                jsSource
             ) as CustomAttrJsFn;
-            this._jsFunctionCache.set(cacheKey, compiledFn);
-            return compiledFn;
+            this._jsFunctionCache.set(cacheKey, fn);
+            return fn;
         } catch (err) {
-            console.error(`CustomAttrHandler failed to compile JS function ${customFnDef.n}`, err);
+            console.error(`CustomAttrHandler failed to compile function ${customFnDef.n}`, err);
             return null;
         }
     }
