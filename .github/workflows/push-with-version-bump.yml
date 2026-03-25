@@ -1,9 +1,7 @@
-name: 'Bump Version'
+name: 'Bump Version (disabled)'
 
 on:
-  push:
-    branches:
-      - 'main'
+  workflow_dispatch:  # manual trigger only — was push-on-main, disabled to avoid divergent branches
 
 jobs:
   bump-version:
