@@ -768,35 +768,64 @@ export class DeviceManager implements RaftDeviceMgrIF{
     }
 
     public async sendAction(deviceKey: string, action: DeviceTypeAction, data: number[]): Promise<boolean> {
-        // console.log(`DeviceManager sendAction ${deviceKey} action name ${action.n} value ${value} prefix ${action.w}`);
+        console.log(`DeviceManager sendAction ${deviceKey} action ${action.n} data ${data} map ${JSON.stringify(action.map)} keys ${action.map ? Object.keys(action.map) : 'none'}`);
 
-        let writeBytes: Uint8Array;
+        let writeHexStr: string;
 
-        // Check for one data item
-        if (data.length === 1) {
-
-            let value = data[0];
-
-            // Check for conversion
-            if (action.sub !== undefined) {
-                value = value - action.sub;
+        // Check if action has a map - use mapped hex value directly
+        if (action.map && data.length === 1) {
+            const mapKey = String(data[0]);
+            const mappedHex = action.map[mapKey];
+            if (!mappedHex) {
+                console.warn(`DeviceManager sendAction: no map entry for value ${mapKey} in action ${action.n}`);
+                return false;
             }
-            if (action.mul !== undefined) {
-                value = value * action.mul;
+            // Map values may contain &-separated multi-writes (e.g. "1048&114C&0a26")
+            const writes = mappedHex.split('&');
+            const { bus: devBus, addr: devAddr } = parseDeviceKey(deviceKey);
+            try {
+                const msgHandler = this._systemUtils?.getMsgHandler();
+                if (!msgHandler) return false;
+                for (const hexWr of writes) {
+                    const cmd = "devman/cmdraw?bus=" + devBus + "&addr=" + devAddr + "&hexWr=" + hexWr;
+                    console.log(`DeviceManager sendAction ${action.n} ${cmd}`);
+                    const msgRslt = await msgHandler.sendRICRESTURL<RaftOKFail>(cmd);
+                    if (msgRslt.rslt !== "ok") return false;
+                }
+                return true;
+            } catch (error) {
+                console.warn(`DeviceManager sendAction error ${error}`);
+                return false;
+            }
+        } else {
+            let writeBytes: Uint8Array;
+
+            // Check for one data item
+            if (data.length === 1) {
+
+                let value = data[0];
+
+                // Check for conversion
+                if (action.sub !== undefined) {
+                    value = value - action.sub;
+                }
+                if (action.mul !== undefined) {
+                    value = value * action.mul;
+                }
+
+                // Form the write bytes
+                writeBytes = action.t ? structPack(action.t, [value]) : new Uint8Array(0);
+
+            } else
+            {
+
+                // Form the write bytes which may have multiple data items
+                writeBytes = action.t ? structPack(action.t, data) : new Uint8Array(0);
             }
 
-            // Form the write bytes
-            writeBytes = action.t ? structPack(action.t, [value]) : new Uint8Array(0);
-
-        } else
-        {
-
-            // Form the write bytes which may have multiple data items
-            writeBytes = action.t ? structPack(action.t, data) : new Uint8Array(0);
+            // Convert to hex string
+            writeHexStr = this.toHex(writeBytes);
         }
-
-        // Convert to hex string
-        let writeHexStr = this.toHex(writeBytes);
 
         // Add prefix and postfix
         writeHexStr = (action.w ? action.w : "") + writeHexStr + (action.wz ? action.wz : "");

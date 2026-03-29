@@ -88,6 +88,42 @@ const DeviceActionsForm: React.FC<DeviceActionsTableProps> = ({ deviceKey }: Dev
                                     </td>
                                 </tr>
                             );
+                        } else if (action.map) {
+                            const mapKeys = Object.keys(action.map).sort((a, b) => parseFloat(a) - parseFloat(b));
+                            return (
+                                <tr key={action.n}>
+                                    <td>{action.desc ?? action.n}</td>
+                                    <td>
+                                        <select
+                                            value={inputValues[action.n]}
+                                            onChange={(e) =>
+                                                handleInputChange(
+                                                    action.n,
+                                                    parseFloat(e.target.value)
+                                                )
+                                            }
+                                        >
+                                            {mapKeys.map((key) => (
+                                                <option key={key} value={parseFloat(key)}>
+                                                    {key}
+                                                </option>
+                                            ))}
+                                        </select>
+                                    </td>
+                                    <td>
+                                        <button
+                                            onClick={() =>
+                                                handleSendAction(
+                                                    action,
+                                                    inputValues[action.n]
+                                                )
+                                            }
+                                        >
+                                            Send
+                                        </button>
+                                    </td>
+                                </tr>
+                            );
                         } else {
                             return (
                                 <tr key={action.n}>

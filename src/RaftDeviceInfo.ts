@@ -102,6 +102,8 @@ export interface DeviceTypeAction {
     mul?: number;                   // Multiplier to apply
     sub?: number;                   // Value to subtract before multiplying
     d?: number;                     // Default value
+    map?: Record<string, string>;   // Discrete value mapping (display value -> hex bytes to write)
+    desc?: string;                  // Human-readable description
 }
 
 export interface DeviceTypeInfo {
