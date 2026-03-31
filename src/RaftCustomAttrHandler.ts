@@ -46,12 +46,15 @@ export default class CustomAttrHandler {
             return attrValueVecs;
         }
 
-        // Provide only this poll block (bounded by pollRespMetadata.b) to avoid
-        // decoding bytes that belong to subsequent records in the same frame.
-        const buf = msgBuffer.slice(msgBufIdx, msgBufIdx + numMsgBytes);
-        if (buf.length < numMsgBytes) {
+        // Provide this poll block to the custom handler. Use the smaller of
+        // pollRespMetadata.b and the bytes actually available — variable-length
+        // samples may be shorter than b, and the last sample in a frame may not
+        // have b bytes remaining in the buffer.
+        const availableBytes = Math.min(numMsgBytes, msgBuffer.length - msgBufIdx);
+        if (availableBytes <= 0) {
             return [];
         }
+        const buf = msgBuffer.slice(msgBufIdx, msgBufIdx + availableBytes);
 
         const fn = this.getOrCompileFunction(customFnDef);
         if (!fn) {

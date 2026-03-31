@@ -159,8 +159,18 @@ export default class AttributeHandler {
         // Handle the timestamps with increments if specified
         const timeIncUs: number = pollRespMetadata.us ? pollRespMetadata.us : 1000;
         const timestampsUs = Array(numNewDataPoints).fill(0);
+        // Get the last timestamp in the timeline to ensure monotonicity
+        const lastTimeUs = deviceTimeline.timestampsUs.length > 0 
+            ? deviceTimeline.timestampsUs[deviceTimeline.timestampsUs.length - 1] 
+            : -Infinity;
         for (let i = 0; i < numNewDataPoints; i++) {
-            timestampsUs[i] =  timestampUs + i * timeIncUs;
+            timestampsUs[i] = timestampUs + i * timeIncUs;
+            // Ensure monotonically increasing timestamps
+            if (i === 0 && timestampsUs[0] <= lastTimeUs) {
+                timestampsUs[0] = lastTimeUs + 1;
+            } else if (i > 0 && timestampsUs[i] <= timestampsUs[i - 1]) {
+                timestampsUs[i] = timestampsUs[i - 1] + 1;
+            }
         }
         
         // Check if timeline points need to be discarded

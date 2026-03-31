@@ -217,29 +217,44 @@ export class DeviceManager implements RaftDeviceMgrIF{
         // The rxMsg passed to this function has a 2-byte message type prefix (e.g. 0x0080)
         // added by the transport layer. After that prefix comes a devbin frame:
         //
-        // Devbin envelope (2 bytes):
-        //   Byte 0: magic+version  0xDB = devbin v1 (valid range 0xDB–0xDF for v1–v5)
-        //   Byte 1: topicIndex     0x00–0xFE = topic index; 0xFF = no topic
+        // Devbin envelope (3 bytes):
+        //   Byte 0: magic+version   0xDB (valid range 0xDB–0xDF)
+        //   Byte 1: topicIndex      0x00–0xFE = topic index; 0xFF = no topic
+        //   Byte 2: envelopeSeqNum  uint8, wrapping — detects whole-frame drops
         //
         // Then zero or more per-device records, concatenated back-to-back:
-        //   Bytes 0-1:  recordLen    uint16 big-endian — number of body bytes that follow (min 7)
-        //   Byte  2:    statusBus    bit 7 = online flag, bit 6 = pending deletion, bits 5:4 = reserved, bits 3:0 = bus number (0-15)
-        //   Bytes 3-6:  address      uint32 big-endian — device address on the bus
-        //   Bytes 7-8:  devTypeIdx   uint16 big-endian — device type table index
-        //   Bytes 9+:   pollData     variable length (recordLen − 7 bytes) — device data
+        //   Bytes 0-1:  recordLen     uint16 big-endian — number of body bytes that follow (min 8)
+        //   Byte  2:    statusBus     bit 7 = online flag, bit 6 = pending deletion, bits 3:0 = bus number
+        //   Bytes 3-6:  address       uint32 big-endian — device address on the bus
+        //   Bytes 7-8:  devTypeIdx    uint16 big-endian — device type table index
+        //   Byte  9:    deviceSeqNum  uint8, wrapping — per-device drop detection
+        //   Bytes 10+:  samples       length-prefixed: [sampleLen(1B)][sampleData(sampleLen B)] × N
         //
-        // Example message (with transport prefix):
-        //   0080 DB01 0015 81 0000076a 000b bff10000ffffffff7a07d1f1221c 000e 80 00000000 001f bc340000030001
-        //   ^^^^ ^^^^                                                     ^^^^
-        //   |    |  |  ||   |          |    |                              Record 2 ...
-        //   |    |  |  ||   |          |    pollData (14 bytes)
-        //   |    |  |  ||   |          devTypeIdx = 0x000b (11)
-        //   |    |  |  ||   address = 0x0000076a (slot 7, I2C addr 0x6a)
-        //   |    |  |  |busInfo = 0x81 (bus 1, online)
-        //   |    |  |  recordLen = 0x0015 (21 bytes)
+        // Example message (two device records; first record has two samples):
+        //   0080 DB 01 07 0018 81 0000076a 000b 2a 07feff0000010008 07185707931400 01 000e 80 00000000 001f 05 05030001af01
+        //   ^^^^                                                                       ^^^^
+        //   |    ^^ ^^ ^^                                                              Record 2 ...
+        //   |    |  |  envelopeSeqNum = 0x07                                           (same layout as Record 1)
         //   |    |  topicIndex = 0x01
         //   |    magic+version = 0xDB (devbin v1)
         //   msgType prefix (transport layer)
+        //
+        //   Record 1 breakdown:
+        //     0018               recordLen = 24 body bytes follow
+        //     81                 statusBus: online=1, pendDel=0, bus=1
+        //     0000076a           address = 0x0000076A (slot 7, I2C addr 0x6A)
+        //     000b               devTypeIdx = 11
+        //     2a                 deviceSeqNum = 42
+        //     07 feff0000010008  sample 1: sampleLen=7, 7 bytes of attribute data
+        //     07 18570793140001  sample 2: sampleLen=7, 7 bytes of attribute data
+        //
+        //   Record 2 breakdown:
+        //     000e               recordLen = 14 body bytes follow
+        //     80                 statusBus: online=1, pendDel=0, bus=0
+        //     00000000           address = 0x00000000 (direct-connect)
+        //     001f               devTypeIdx = 31
+        //     05                 deviceSeqNum = 5
+        //     05 030001af01      sample 1: sampleLen=5, 5 bytes of attribute data
 
         // Debug
         // const debugMsgTime = Date.now();
@@ -247,14 +262,15 @@ export class DeviceManager implements RaftDeviceMgrIF{
 
         // Message layout constants
         const msgTypeLen = 2; // Transport-layer message type prefix (first two bytes, e.g. 0x0080)
-        const devbinEnvelopeLen = 2; // Devbin envelope: magic+version (1 byte) + topicIndex (1 byte)
+        const devbinEnvelopeLen = 3; // Devbin envelope: magic+version (1B) + topicIndex (1B) + envelopeSeqNum (1B)
         const devbinMagicMin = 0xDB;
         const devbinMagicMax = 0xDF;
         const recordLenLen = 2; // Per-record length prefix (uint16 big-endian)
         const busInfoLen = 1; // statusBus byte: bit 7 = online, bit 6 = pending deletion, bits 3:0 = bus number
         const deviceAddrLen = 4; // Device address (uint32 big-endian)
         const devTypeIdxLen = 2; // Device type index (uint16 big-endian)
-        const recordHeaderLen = busInfoLen + deviceAddrLen + devTypeIdxLen; // = 7, minimum record body
+        const deviceSeqNumLen = 1; // Per-device sequence counter
+        const recordHeaderLen = busInfoLen + deviceAddrLen + devTypeIdxLen + deviceSeqNumLen; // = 8, minimum record body
 
         // console.log(`DevMan.handleClientMsgBinary debugIdx ${debugMsgIndex} rxMsg.length ${rxMsg.length} rxMsg ${RaftUtils.bufferToHex(rxMsg)}`);
 
@@ -315,7 +331,13 @@ export class DeviceManager implements RaftDeviceMgrIF{
 
             // Device type index (uint16 big-endian)
             const devTypeIdx = (rxMsg[recordPos] << 8) + rxMsg[recordPos + 1];
-            let pollDataPos = recordPos + devTypeIdxLen;
+            recordPos += devTypeIdxLen;
+
+            // Per-device sequence counter (reserved for future drop detection)
+            // const deviceSeqNum = rxMsg[recordPos];
+            recordPos += deviceSeqNumLen;
+
+            let pollDataPos = recordPos;
 
             // Debug
             // console.log(`DevMan.handleClientMsgBinary debugIdx ${debugMsgIndex} overallLen ${rxMsg.length} recordStart ${msgPos} recordLen ${recordLen} ${pollDataPos} ${RaftUtils.bufferToHex(rxMsg.slice(msgPos, msgPos + recordLenLen + recordLen))}`);
@@ -391,17 +413,22 @@ export class DeviceManager implements RaftDeviceMgrIF{
                 // Iterate over attributes in the group
                 const pollRespMetadata = deviceState.deviceTypeInfo!.resp!;
 
-                // Process poll data (recordLen - recordHeaderLen bytes)
-                const pollDataLen = recordLen - recordHeaderLen;
-                const pollDataStartPos = pollDataPos;
+                // Process length-prefixed samples within this record
+                const samplesEndPos = msgPos + recordLenLen + recordLen;
                 const attrLengthsBefore = this.snapshotAttrLengths(deviceState.deviceAttributes, pollRespMetadata);
                 const timelineLenBefore = deviceState.deviceTimeline.timestampsUs.length;
                 const totalSamplesBefore = deviceState.deviceTimeline.totalSamplesAdded;
-                while (pollDataPos < pollDataStartPos + pollDataLen) {
+                while (pollDataPos < samplesEndPos) {
 
-                    // Add bounds checking
+                    // Read sample length prefix
                     if (pollDataPos >= rxMsg.length) {
                         console.warn(`DevMan.handleClientMsgBinary debugIdx ${debugMsgIndex} pollDataPos ${pollDataPos} exceeds message length ${rxMsg.length}`);
+                        break;
+                    }
+                    const sampleLen = rxMsg[pollDataPos];
+                    pollDataPos += 1;
+
+                    if (sampleLen === 0 || pollDataPos + sampleLen > samplesEndPos) {
                         break;
                     }
 
@@ -410,26 +437,15 @@ export class DeviceManager implements RaftDeviceMgrIF{
                         deviceState.deviceAttributes,
                         this._maxDatapointsToStore);
 
-                    // console.log(`DevMan.handleClientMsgBinary decoded debugIdx ${debugMsgIndex} devType ${deviceState.deviceTypeInfo.name} pollDataLen ${pollDataLen} pollDataPos ${pollDataPos} recordLen ${recordLen} msgPos ${msgPos} rxMsgLen ${rxMsg.length} remainingLen ${remainingLen} pollRespMetadata ${JSON.stringify(pollRespMetadata)}`);
-
                     if (newMsgBufIdx < 0)
                     {
                         console.warn(`DevMan.handleClientMsgBinary debugIdx ${debugMsgIndex} processMsgAttrGroup failed newMsgBufIdx ${newMsgBufIdx}`);
                         break;
                     }
-                    
-                    // Prevent infinite loops
-                    if (newMsgBufIdx <= pollDataPos) {
-                        console.warn(`DevMan.handleClientMsgBinary debugIdx ${debugMsgIndex} processMsgAttrGroup didn't advance position from ${pollDataPos} to ${newMsgBufIdx}`);
-                        break;
-                    }
 
-                    pollDataPos = newMsgBufIdx;
+                    // Advance by sampleLen regardless of how much processMsgAttrGroup consumed
+                    pollDataPos += sampleLen;
                     deviceState.stateChanged = true;
-
-                    // console.log(`debugMsgTime ${debugMsgTime} newPt debugMsgIdx ${debugMsgIndex} rxMsgLen ${rxMsg.length} devType ${deviceState.deviceTypeInfo!.name} timestampsUs ${deviceState.deviceTimeline.timestampsUs[deviceState.deviceTimeline.timestampsUs.length - 1]} curTimelineLen ${deviceState.deviceTimeline.timestampsUs.length}`);
-
-                    // console.log(`DevMan.handleClientMsgBinary group done debugIdx ${debugMsgIndex} pollDataPos ${pollDataPos} recordLen ${recordLen} msgPos ${msgPos} rxMsgLen ${rxMsg.length} remainingLen ${remainingLen}`);
                 }
 
                 // Inform decoded-data callbacks
