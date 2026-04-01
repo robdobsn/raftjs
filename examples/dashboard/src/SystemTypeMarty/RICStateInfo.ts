@@ -1,4 +1,5 @@
 import RaftDeviceMgrIF from "../../../../src/RaftDeviceMgrIF";
+import { SampleRateResult } from "../../../../src/RaftDeviceInfo";
 import { DeviceAttributeState, DevicesState, DeviceState, DeviceOnlineState } from '../../../../src/RaftDeviceStates';
 import { RICSERIAL_PAYLOAD_POS } from "../../../../src/RaftProtocolDefs";
 import RICAddOnManager from "./RICAddOnManager";
@@ -98,6 +99,22 @@ export class RICStateInfo implements RaftDeviceMgrIF {
     }
 
     sendCompoundAction(deviceKey: string, action: any, data: any): void {
+        // TODO - implement if RICStateInfo is to be used as a DeviceMgr
+    }
+
+    async setSampleRate(deviceKey: string, sampleRateHz: number, options?: {
+        numSamples?: number; intervalUs?: number; maxNumSamples?: number;
+    }): Promise<SampleRateResult> {
+        // TODO - implement if RICStateInfo is to be used as a DeviceMgr
+        return { ok: false, requestedRateHz: sampleRateHz, actualRateHz: 0, intervalUs: 0, numSamples: 0, error: 'Not implemented' };
+    }
+
+    getDeviceStats(deviceKey: string): any {
+        // TODO - implement if RICStateInfo is to be used as a DeviceMgr
+        return {};
+    }
+
+    resetDeviceStats(deviceKey: string): void {
         // TODO - implement if RICStateInfo is to be used as a DeviceMgr
     }
 

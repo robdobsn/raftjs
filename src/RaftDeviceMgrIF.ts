@@ -7,7 +7,7 @@
 //
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-import { DeviceTypeAction } from "./RaftDeviceInfo";
+import { DeviceTypeAction, SampleRateResult } from "./RaftDeviceInfo";
 import { DeviceAttributeState, DevicesState, DeviceState, DeviceStats } from "./RaftDeviceStates";
 
 export default interface RaftDeviceMgrIF {
@@ -34,4 +34,11 @@ export default interface RaftDeviceMgrIF {
     // Send action to device
     sendAction(deviceKey: string, action: DeviceTypeAction, data: number[]): void;
     sendCompoundAction(deviceKey: string, action: DeviceTypeAction, data: number[][]): void;
+
+    // Set sample rate with coordinated polling parameters
+    setSampleRate(deviceKey: string, sampleRateHz: number, options?: {
+        numSamples?: number;
+        intervalUs?: number;
+        maxNumSamples?: number;
+    }): Promise<SampleRateResult>;
 }

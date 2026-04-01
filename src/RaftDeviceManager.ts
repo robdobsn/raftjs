@@ -10,7 +10,7 @@
 import { DeviceAttributeState, DeviceAttributesState, DevicesState, DeviceState, DeviceStats, DeviceOnlineState, formatDeviceAddrHex, getDeviceKey, parseDeviceKey } from "./RaftDeviceStates";
 import { DeviceMsgJson } from "./RaftDeviceMsg";
 import { RaftOKFail } from './RaftTypes';
-import { DeviceTypeInfo, DeviceTypeAction, DeviceTypeInfoRecs, RaftDevTypeInfoResponse } from "./RaftDeviceInfo";
+import { DeviceTypeInfo, DeviceTypeAction, DeviceTypeInfoRecs, RaftDevTypeInfoResponse, SampleRateResult, getActionMapHex } from "./RaftDeviceInfo";
 import AttributeHandler from "./RaftAttributeHandler";
 import RaftSystemUtils from "./RaftSystemUtils";
 import RaftDeviceMgrIF from "./RaftDeviceMgrIF";
@@ -786,16 +786,23 @@ export class DeviceManager implements RaftDeviceMgrIF{
     public async sendAction(deviceKey: string, action: DeviceTypeAction, data: number[]): Promise<boolean> {
         console.log(`DeviceManager sendAction ${deviceKey} action ${action.n} data ${data} map ${JSON.stringify(action.map)} keys ${action.map ? Object.keys(action.map) : 'none'}`);
 
+        // For _conf.* actions, delegate to setSampleRate() which coordinates polling params
+        if (action.n.startsWith('_conf.') && action.map && data.length === 1) {
+            const result = await this.setSampleRate(deviceKey, data[0]);
+            return result.ok;
+        }
+
         let writeHexStr: string;
 
         // Check if action has a map - use mapped hex value directly
         if (action.map && data.length === 1) {
             const mapKey = String(data[0]);
-            const mappedHex = action.map[mapKey];
-            if (!mappedHex) {
+            const mapEntry = action.map[mapKey];
+            if (!mapEntry) {
                 console.warn(`DeviceManager sendAction: no map entry for value ${mapKey} in action ${action.n}`);
                 return false;
             }
+            const mappedHex = getActionMapHex(mapEntry);
             // Map values may contain &-separated multi-writes (e.g. "1048&114C&0a26")
             const writes = mappedHex.split('&');
             const { bus: devBus, addr: devAddr } = parseDeviceKey(deviceKey);
@@ -900,6 +907,106 @@ export class DeviceManager implements RaftDeviceMgrIF{
             }
         }
         return false;
+    }
+
+    ////////////////////////////////////////////////////////////////////////////
+    // Set sample rate with coordinated polling parameters
+    // Finds the closest supported rate from the device's _conf.rate action,
+    // calculates optimal intervalUs and numSamples, and sends a single
+    // /devman/devconfig call to set all parameters atomically.
+    ////////////////////////////////////////////////////////////////////////////
+
+    public async setSampleRate(deviceKey: string, sampleRateHz: number, options?: {
+        numSamples?: number;
+        intervalUs?: number;
+        maxNumSamples?: number;
+    }): Promise<SampleRateResult> {
+        // Look up device state and type info
+        const deviceState = this._devicesState[deviceKey];
+        if (!deviceState?.deviceTypeInfo) {
+            return { ok: false, requestedRateHz: sampleRateHz, actualRateHz: 0, intervalUs: 0, numSamples: 0, error: 'Device not found or type info not loaded' };
+        }
+        const typeInfo = deviceState.deviceTypeInfo;
+
+        // Find the _conf.rate action
+        const confRateAction = typeInfo.actions?.find(a => a.n === '_conf.rate');
+        if (!confRateAction?.map) {
+            return { ok: false, requestedRateHz: sampleRateHz, actualRateHz: 0, intervalUs: 0, numSamples: 0, error: 'Device does not have a _conf.rate action with a rate map' };
+        }
+
+        // Find the closest supported rate from the map keys
+        const supportedRates = Object.keys(confRateAction.map).map(Number).filter(r => !isNaN(r)).sort((a, b) => a - b);
+        if (supportedRates.length === 0) {
+            return { ok: false, requestedRateHz: sampleRateHz, actualRateHz: 0, intervalUs: 0, numSamples: 0, error: 'No valid rates in _conf.rate map' };
+        }
+
+        let actualRate = supportedRates[0];
+        let minDist = Math.abs(sampleRateHz - actualRate);
+        for (const rate of supportedRates) {
+            const dist = Math.abs(sampleRateHz - rate);
+            if (dist < minDist) {
+                minDist = dist;
+                actualRate = rate;
+            }
+        }
+
+        // Look up map entry for the matched rate — may be object with recommended polling params
+        const mapEntry = confRateAction.map[String(actualRate)];
+        const mapObj = typeof mapEntry === 'object' ? mapEntry : null;
+        const recommendedIntervalUs = mapObj?.i;
+        const recommendedNumSamples = mapObj?.s;
+
+        // Calculate inter-sample period
+        const samplePeriodUs = Math.round(1000000 / actualRate);
+
+        // Calculate optimal numSamples and intervalUs
+        // Priority: explicit options > map entry recommendations > auto-calculation
+        const maxNumSamples = options?.maxNumSamples ?? 20;
+        let numSamples: number;
+        let intervalUs: number;
+
+        if (options?.numSamples !== undefined && options?.intervalUs !== undefined) {
+            // Both explicitly specified — use as-is
+            numSamples = options.numSamples;
+            intervalUs = options.intervalUs;
+        } else if (options?.intervalUs !== undefined) {
+            // intervalUs specified, derive numSamples from it
+            intervalUs = options.intervalUs;
+            numSamples = options?.numSamples ?? recommendedNumSamples ??
+                Math.max(1, Math.min(maxNumSamples, Math.floor(intervalUs / samplePeriodUs)));
+        } else if (options?.numSamples !== undefined) {
+            // numSamples specified, derive intervalUs from it
+            numSamples = options.numSamples;
+            intervalUs = recommendedIntervalUs ??
+                Math.round(numSamples * samplePeriodUs * 0.8);
+        } else if (recommendedIntervalUs !== undefined && recommendedNumSamples !== undefined) {
+            // Use map entry recommendations
+            intervalUs = recommendedIntervalUs;
+            numSamples = recommendedNumSamples;
+        } else {
+            // Auto-calculate: target ~50ms poll interval, bounded by sample rate
+            const targetPollIntervalUs = 50000;
+            numSamples = recommendedNumSamples ??
+                Math.max(1, Math.min(maxNumSamples, Math.floor(targetPollIntervalUs / samplePeriodUs)));
+            intervalUs = recommendedIntervalUs ??
+                Math.max(5000, Math.min(1000000, Math.round(numSamples * samplePeriodUs * 0.8)));
+        }
+
+        // Send single devconfig call with all parameters
+        const { bus: devBus, addr: devAddr } = parseDeviceKey(deviceKey);
+        const cmd = `devman/devconfig?bus=${devBus}&addr=${devAddr}&sampleRateHz=${actualRate}&intervalUs=${intervalUs}&numSamples=${numSamples}`;
+
+        try {
+            const msgHandler = this._systemUtils?.getMsgHandler();
+            if (!msgHandler) {
+                return { ok: false, requestedRateHz: sampleRateHz, actualRateHz: actualRate, intervalUs, numSamples, error: 'No message handler available' };
+            }
+            const msgRslt = await msgHandler.sendRICRESTURL<RaftOKFail>(cmd);
+            const ok = msgRslt.rslt === 'ok';
+            return { ok, requestedRateHz: sampleRateHz, actualRateHz: actualRate, intervalUs, numSamples, error: ok ? undefined : `Firmware returned: ${msgRslt.rslt}` };
+        } catch (error) {
+            return { ok: false, requestedRateHz: sampleRateHz, actualRateHz: actualRate, intervalUs, numSamples, error: `${error}` };
+        }
     }
 
     ////////////////////////////////////////////////////////////////////////////

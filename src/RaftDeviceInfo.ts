@@ -89,6 +89,31 @@ export interface DeviceTypePollRespMetadata {
     us?: number;                    // Time between consecutive samples in microseconds 
 }
 
+export interface SampleRateResult {
+    ok: boolean;
+    requestedRateHz: number;
+    actualRateHz: number;           // Closest supported rate from _conf.rate map
+    intervalUs: number;             // Polling interval set
+    numSamples: number;             // Buffer depth set
+    error?: string;
+}
+
+export interface ActionMapEntry {
+    w: string;                      // Hex bytes to write (may contain &-separated multi-writes)
+    i?: number;                     // Recommended polling interval in microseconds
+    s?: number;                     // Recommended number of poll result samples (buffer depth)
+}
+
+export type ActionMapValue = string | ActionMapEntry;
+
+export function getActionMapHex(entry: ActionMapValue): string {
+    return typeof entry === 'string' ? entry : entry.w;
+}
+
+export function getActionMapEntry(entry: ActionMapValue): ActionMapEntry | null {
+    return typeof entry === 'object' ? entry : null;
+}
+
 export interface DeviceTypeAction {
     n: string;                      // Action name
     t?: string;                     // Action type using python struct module format (e.g. 'H' for unsigned short, 'h' for signed short, 'f' for float etc.)
@@ -102,7 +127,7 @@ export interface DeviceTypeAction {
     mul?: number;                   // Multiplier to apply
     sub?: number;                   // Value to subtract before multiplying
     d?: number;                     // Default value
-    map?: Record<string, string>;   // Discrete value mapping (display value -> hex bytes to write)
+    map?: Record<string, ActionMapValue>; // Discrete value mapping (display value -> hex string or {w, i, s} object)
     desc?: string;                  // Human-readable description
 }
 

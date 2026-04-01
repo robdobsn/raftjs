@@ -17,6 +17,7 @@ const DeviceActionsForm: React.FC<DeviceActionsTableProps> = ({ deviceKey }: Dev
     const deviceManager = connManager.getConnector().getSystemType()?.deviceMgrIF;
     const [deviceActions, setDeviceActions] = useState<DeviceTypeAction[]>([]);
     const [inputValues, setInputValues] = useState<InputValues>({});
+    const [actionStatus, setActionStatus] = useState<string>('');
 
     useEffect(() => {
         if (!deviceManager) {
@@ -50,12 +51,24 @@ const DeviceActionsForm: React.FC<DeviceActionsTableProps> = ({ deviceKey }: Dev
         }));
     };
 
-    const handleSendAction = (action: DeviceTypeAction, value: number) => {
+    const handleSendAction = async (action: DeviceTypeAction, value: number) => {
         // Send action to device
         if (!deviceManager) {
             return;
         }
-        deviceManager.sendAction(deviceKey, action, [value]);
+        // For _conf.rate actions, use setSampleRate for coordinated polling config
+        if (action.n === '_conf.rate' && action.map) {
+            setActionStatus('Setting sample rate...');
+            const result = await deviceManager.setSampleRate(deviceKey, value);
+            if (result.ok) {
+                setActionStatus(`Rate: ${result.actualRateHz} Hz, poll: ${result.intervalUs} µs, buf: ${result.numSamples}`);
+            } else {
+                setActionStatus(`Error: ${result.error}`);
+            }
+            setTimeout(() => setActionStatus(''), 5000);
+        } else {
+            deviceManager.sendAction(deviceKey, action, [value]);
+        }
     };
 
     if (deviceActions.length === 0) {
@@ -162,6 +175,7 @@ const DeviceActionsForm: React.FC<DeviceActionsTableProps> = ({ deviceKey }: Dev
                     })}
                 </tbody>
             </table>
+            {actionStatus && <div className="action-status">{actionStatus}</div>}
         </div>
     );
 };
