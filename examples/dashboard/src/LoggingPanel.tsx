@@ -43,6 +43,7 @@ export default function LoggingPanel({ onLogStopped, pausePolling }: LoggingPane
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const fetchStatus = async () => {
+    if (!connManager.getConnector().isConnected()) return;
     try {
       const resp = await connManager.getConnector().sendRICRESTMsg(
         'datalog?action=status', {}

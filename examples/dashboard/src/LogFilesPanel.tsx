@@ -19,6 +19,7 @@ export default function LogFilesPanel({ refreshTrigger, onDownloadActiveChange }
   const [lastError, setLastError] = useState('');
 
   const fetchFiles = async () => {
+    if (!connManager.getConnector().isConnected()) return;
     setIsLoading(true);
     setLastError('');
     try {
