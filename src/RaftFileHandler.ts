@@ -471,7 +471,7 @@ export default class RaftFileHandler {
   async _receiveFileStart(fileName: string, bridgeID: number | undefined) : Promise<boolean> {
 
     const blockMaxSizeRequested = 5000;
-    const batchAckSizeRequested = 10;
+    const batchAckSizeRequested = 4;
     const fileSrc = "fs";
 
     // Request file transfer
@@ -513,6 +513,18 @@ export default class RaftFileHandler {
         progressCallback: RaftProgressCBType | undefined,
         bridgeID: number | undefined
   ): Promise<RaftFileDownloadResult> {
+
+    // Calculate dynamic timeouts based on file size and connection speed
+    // Use batch message size as proxy for connection type:
+    //   BLE ~500 byte blocks ~5 KB/s, WebSocket ~5000 byte blocks ~50 KB/s
+    const estimatedBytesPerSec = this._fileRxBatchMsgSize <= 500 ? 5000 : 50000;
+    const BASE_TIMEOUT_MS = 30000;
+    const SAFETY_FACTOR = 2;
+    const transferTimeMs = (this._fileRxFileLen / estimatedBytesPerSec) * 1000 * SAFETY_FACTOR;
+    const overallTimeoutMs = BASE_TIMEOUT_MS + transferTimeMs;
+    const blockTimeoutMs = this.BLOCK_ACK_TIMEOUT_MS;
+    RaftLog.info(`_receiveFileContents - fileLen ${this._fileRxFileLen} batchMsgSize ${this._fileRxBatchMsgSize} ` +
+        `estimatedBytesPerSec ${estimatedBytesPerSec} overallTimeoutMs ${overallTimeoutMs} blockTimeoutMs ${blockTimeoutMs}`);
 
     // Wait for file to be received
     return new Promise<RaftFileDownloadResult>((resolve, reject) => {
@@ -556,9 +568,11 @@ export default class RaftFileHandler {
         const now = Date.now();
 
         // Check for overall timeouts
-        if ((now - startTime > this.OVERALL_FILE_TRANSFER_TIMEOUT_MS) || 
-            (now - this._fileRxLastBlockTime > this.BLOCK_ACK_TIMEOUT_MS)) {
-          RaftLog.warn(`_receiveFileContents - time-out no new data received`);
+        if ((now - startTime > overallTimeoutMs) || 
+            (now - this._fileRxLastBlockTime > blockTimeoutMs)) {
+          RaftLog.warn(`_receiveFileContents - time-out no new data received ` +
+              `elapsed ${now - startTime}ms overallTimeout ${overallTimeoutMs}ms ` +
+              `blockGap ${now - this._fileRxLastBlockTime}ms blockTimeout ${blockTimeoutMs}ms`);
           this._fileRxActive = false;
           reject(new Error('fileReceive failed'));
           return;

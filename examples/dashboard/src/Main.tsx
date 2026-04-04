@@ -11,6 +11,9 @@ import {
 import StatusPanel from './StatusPanel';
 import DevicesPanel from './DevicesPanel';
 import CommandPanel from './CommandPanel';
+import LoggingPanel from './LoggingPanel';
+import LogFilesPanel from './LogFilesPanel';
+
 import LatencyTestPanel from './LatencyTestPanel';
 import SettingsManager from './SettingsManager';
 
@@ -34,6 +37,7 @@ export default function Main() {
   const [ipAddress, setIpAddress] = useState<string>(
     localStorage.getItem('lastIpAddress') || ''
   );
+  const [fileRefreshTrigger, setFileRefreshTrigger] = useState(0);
 
   const [serialNo, setSerialNo] = useState<string>('');
 
@@ -169,6 +173,8 @@ export default function Main() {
                   <StatusPanel />
                   {latencyTestEnabled && <LatencyTestPanel />}
                   <CommandPanel />
+                  <LoggingPanel onLogStopped={() => setFileRefreshTrigger(n => n + 1)} />
+                  <LogFilesPanel refreshTrigger={fileRefreshTrigger} />
                 </div>
                 <DevicesPanel />
               </>

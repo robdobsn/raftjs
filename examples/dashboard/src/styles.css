@@ -577,3 +577,183 @@ h1 {
         /* Slightly reduce the height for very wide screens */
     }
 }
+
+/* Logging Panel */
+.logging-panel {
+    min-width: 220px;
+}
+
+.logging-status-active {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+    font-weight: bold;
+    color: #4f4;
+}
+
+.logging-indicator {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background-color: #4f4;
+    animation: logging-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes logging-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+}
+
+.logging-start-controls {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    width: 100%;
+}
+
+.logging-label-input {
+    padding: 8px 10px;
+    border: 1px solid #666;
+    border-radius: 4px;
+    background: #222;
+    color: #fff;
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.logging-button-row {
+    display: flex;
+    gap: 8px;
+}
+
+.logging-simulate-button {
+    background-color: #555;
+}
+
+.logging-simulate-button:hover {
+    background-color: #666;
+}
+
+.logging-stop-button {
+    background-color: #c33;
+    margin-top: 10px;
+}
+
+.logging-stop-button:hover {
+    background-color: #e44;
+}
+
+.logging-error {
+    margin-top: 8px;
+    padding: 6px 10px;
+    background: #533;
+    border-radius: 4px;
+    color: #faa;
+    font-size: 0.85em;
+}
+
+/* Log Files Panel */
+.log-files-panel {
+    min-width: 220px;
+}
+
+.log-files-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+}
+
+.log-files-header h3 {
+    margin: 0;
+    flex: 1;
+}
+
+.log-files-refresh-button {
+    background: #555;
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    padding: 4px 10px;
+    cursor: pointer;
+    font-size: 1.2em;
+    line-height: 1;
+}
+
+.log-files-refresh-button:hover {
+    background: #666;
+}
+
+.log-files-disk-info {
+    font-size: 0.8em;
+    color: #aaa;
+    margin-top: 4px;
+}
+
+.log-files-loading,
+.log-files-empty {
+    color: #888;
+    font-size: 0.9em;
+    margin-top: 10px;
+}
+
+.log-files-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-top: 10px;
+    width: 100%;
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+.log-file-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 8px;
+    background: #383838;
+    border-radius: 4px;
+    gap: 8px;
+}
+
+.log-file-info {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    flex: 1;
+}
+
+.log-file-name {
+    font-size: 0.85em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.log-file-size {
+    font-size: 0.75em;
+    color: #888;
+}
+
+.log-file-download-button {
+    background: #007bff;
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    padding: 4px 10px;
+    cursor: pointer;
+    font-size: 0.9em;
+    min-width: 36px;
+    text-align: center;
+}
+
+.log-file-download-button:hover {
+    background: #0056b3;
+}
+
+.log-file-download-button:disabled {
+    background: #444;
+    cursor: not-allowed;
+}
