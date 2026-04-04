@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import ConnManager from './ConnManager';
+import { LogConfig } from './LogConfigPanel';
 import './styles.css';
 
 const connManager = ConnManager.getInstance();
@@ -33,9 +34,10 @@ const emptyStatus: LogStatus = {
 interface LoggingPanelProps {
   onLogStopped?: () => void;
   pausePolling?: boolean;
+  logConfig?: LogConfig | null;
 }
 
-export default function LoggingPanel({ onLogStopped, pausePolling }: LoggingPanelProps) {
+export default function LoggingPanel({ onLogStopped, pausePolling, logConfig }: LoggingPanelProps) {
   const [status, setStatus] = useState<LogStatus>(emptyStatus);
   const [label, setLabel] = useState('');
   const [isBusy, setIsBusy] = useState(false);
@@ -88,8 +90,14 @@ export default function LoggingPanel({ onLogStopped, pausePolling }: LoggingPane
     setLastError('');
     try {
       const labelParam = label.trim() ? `&label=${encodeURIComponent(label.trim())}` : '';
+      let configParam = '';
+      if (logConfig && logConfig.devices.length > 0) {
+        configParam = `&config=${encodeURIComponent(JSON.stringify(logConfig))}`;
+      }
+      // Include current UTC time so firmware can timestamp the log even without NTP
+      const utcParam = `&UTC=${encodeURIComponent(new Date().toISOString().replace(/\\.\\d{3}Z$/, 'Z'))}`;
       const resp = await connManager.getConnector().sendRICRESTMsg(
-        `datalog?action=start${labelParam}`, {}
+        `datalog?action=start${labelParam}${configParam}${utcParam}`, {}
       );
       const r = resp as any;
       if (r?.rslt !== 'ok') {
@@ -215,7 +223,7 @@ export default function LoggingPanel({ onLogStopped, pausePolling }: LoggingPane
               <button
                 className="action-button"
                 onClick={handleStart}
-                disabled={isBusy}
+                disabled={isBusy || (logConfig !== undefined && (!logConfig || logConfig.devices.length === 0))}
               >
                 Start Logging
               </button>

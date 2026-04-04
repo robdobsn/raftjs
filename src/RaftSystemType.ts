@@ -11,6 +11,7 @@ export interface ConnectorOptions {
   connTimeoutMs?: number;
   bleConnItvlMs?: number;
   bleUuid?: string;
+  syncTimeOnConnect?: boolean;  // Send UTC time to device after connecting (default: true)
 }
 
 export interface RaftSystemType {

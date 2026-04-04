@@ -327,6 +327,19 @@ export default class RaftConnector {
       // configure file handler
       this.configureFileHandler(this._raftChannel.fhFileBlockSize(), this._raftChannel.fhBatchAckSize());
 
+      // Sync time to device if enabled (default: true)
+      const syncTime = this._systemType?.connectorOptions?.syncTimeOnConnect ?? true;
+      if (syncTime) {
+        try {
+          const now = new Date();
+          const utc = now.toISOString().replace(/\.\d{3}Z$/, 'Z');
+          await this.sendRICRESTMsg('datetime', { UTC: utc });
+          RaftLog.info(`connect synced time to device: ${utc}`);
+        } catch (error) {
+          RaftLog.warn(`connect time sync failed: ${error}`);
+        }
+      }
+
       // Send connected event
       this.onConnEvent(RaftConnEvent.CONN_CONNECTED);
 

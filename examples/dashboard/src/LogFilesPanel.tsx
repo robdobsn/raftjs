@@ -16,6 +16,7 @@ export default function LogFilesPanel({ refreshTrigger, onDownloadActiveChange }
   const [isLoading, setIsLoading] = useState(false);
   const [downloadingFile, setDownloadingFile] = useState<string | null>(null);
   const [downloadProgress, setDownloadProgress] = useState(0);
+  const [deletingFile, setDeletingFile] = useState<string | null>(null);
   const [lastError, setLastError] = useState('');
 
   const fetchFiles = async () => {
@@ -50,9 +51,8 @@ export default function LogFilesPanel({ refreshTrigger, onDownloadActiveChange }
 
   const handleDownload = async (file: {name: string, size: number}) => {
     // Estimate download time and warn user for large transfers
-    const channel = connManager.getConnector().getRaftChannel();
-    const blockSize = channel?.fhFileBlockSize() ?? 5000;
-    const isBLE = blockSize <= 500;
+    const connMethod = connManager.getConnector().getConnMethod();
+    const isBLE = connMethod === 'WebBLE' || connMethod === 'PhoneBLE';
     const estimatedBytesPerSec = isBLE ? 5000 : 50000;
     const estimatedTimeSec = file.size / estimatedBytesPerSec;
 
@@ -60,10 +60,9 @@ export default function LogFilesPanel({ refreshTrigger, onDownloadActiveChange }
       const timeStr = estimatedTimeSec >= 60
         ? `${Math.round(estimatedTimeSec / 60)} min ${Math.round(estimatedTimeSec % 60)} sec`
         : `${Math.round(estimatedTimeSec)} sec`;
-      const connType = isBLE ? 'BLE' : 'WebSocket';
       const confirmed = window.confirm(
         `Download ${file.name} (${formatBytes(file.size)})?\n\n` +
-        `Estimated time over ${connType}: ~${timeStr}\n\n` +
+        `Estimated time over ${connMethod}: ~${timeStr}\n\n` +
         `Continue?`
       );
       if (!confirmed) return;
@@ -109,6 +108,29 @@ export default function LogFilesPanel({ refreshTrigger, onDownloadActiveChange }
     onDownloadActiveChange?.(false);
   };
 
+  const handleDelete = async (file: {name: string, size: number}) => {
+    const confirmed = window.confirm(`Delete ${file.name} (${formatBytes(file.size)})?`);
+    if (!confirmed) return;
+
+    setDeletingFile(file.name);
+    setLastError('');
+    try {
+      const resp = await connManager.getConnector().sendRICRESTMsg(
+        `filedelete/local/logs/${file.name}`, {}
+      );
+      const r = resp as any;
+      if (r?.rslt === 'ok') {
+        await fetchFiles();
+      } else {
+        setLastError(`Failed to delete ${file.name}`);
+      }
+    } catch (e) {
+      console.warn('Delete failed', e);
+      setLastError(`Delete error: ${file.name}`);
+    }
+    setDeletingFile(null);
+  };
+
   return (
     <div className="info-box log-files-panel">
       <div className="log-files-header">
@@ -146,14 +168,24 @@ export default function LogFilesPanel({ refreshTrigger, onDownloadActiveChange }
                   </div>
                   <div className="log-file-size">{formatBytes(file.size)}</div>
                 </div>
-                <button
-                  className="log-file-download-button"
-                  onClick={() => handleDownload(file)}
-                  disabled={isDownloading || downloadingFile !== null}
-                  title={`Download ${file.name}`}
-                >
-                  {isDownloading ? `${downloadProgress}%` : '⬇'}
-                </button>
+                <div className="log-file-actions">
+                  <button
+                    className="log-file-download-button"
+                    onClick={() => handleDownload(file)}
+                    disabled={isDownloading || downloadingFile !== null || deletingFile !== null}
+                    title={`Download ${file.name}`}
+                  >
+                    {isDownloading ? `${downloadProgress}%` : '⬇'}
+                  </button>
+                  <button
+                    className="log-file-delete-button"
+                    onClick={() => handleDelete(file)}
+                    disabled={isDownloading || downloadingFile !== null || deletingFile === file.name}
+                    title={`Delete ${file.name}`}
+                  >
+                    {deletingFile === file.name ? '...' : '🗑'}
+                  </button>
+                </div>
               </div>
             );
           })}
