@@ -6,9 +6,10 @@ const connManager = ConnManager.getInstance();
 
 interface LogFilesPanelProps {
   refreshTrigger?: number;
+  onDownloadActiveChange?: (active: boolean) => void;
 }
 
-export default function LogFilesPanel({ refreshTrigger }: LogFilesPanelProps) {
+export default function LogFilesPanel({ refreshTrigger, onDownloadActiveChange }: LogFilesPanelProps) {
   const [files, setFiles] = useState<{name: string, size: number}[]>([]);
   const [diskSize, setDiskSize] = useState(0);
   const [diskUsed, setDiskUsed] = useState(0);
@@ -70,6 +71,7 @@ export default function LogFilesPanel({ refreshTrigger }: LogFilesPanelProps) {
     setDownloadingFile(file.name);
     setDownloadProgress(0);
     setLastError('');
+    onDownloadActiveChange?.(true);
     try {
       // Download from local/logs/<filename>
       const filePath = `local/logs/${file.name}`;
@@ -103,6 +105,7 @@ export default function LogFilesPanel({ refreshTrigger }: LogFilesPanelProps) {
     }
     setDownloadingFile(null);
     setDownloadProgress(0);
+    onDownloadActiveChange?.(false);
   };
 
   return (

@@ -38,6 +38,7 @@ export default function Main() {
     localStorage.getItem('lastIpAddress') || ''
   );
   const [fileRefreshTrigger, setFileRefreshTrigger] = useState(0);
+  const [downloadActive, setDownloadActive] = useState(false);
 
   const [serialNo, setSerialNo] = useState<string>('');
 
@@ -173,8 +174,8 @@ export default function Main() {
                   <StatusPanel />
                   {latencyTestEnabled && <LatencyTestPanel />}
                   <CommandPanel />
-                  <LoggingPanel onLogStopped={() => setFileRefreshTrigger(n => n + 1)} />
-                  <LogFilesPanel refreshTrigger={fileRefreshTrigger} />
+                  <LoggingPanel onLogStopped={() => setFileRefreshTrigger(n => n + 1)} pausePolling={downloadActive} />
+                  <LogFilesPanel refreshTrigger={fileRefreshTrigger} onDownloadActiveChange={setDownloadActive} />
                 </div>
                 <DevicesPanel />
               </>

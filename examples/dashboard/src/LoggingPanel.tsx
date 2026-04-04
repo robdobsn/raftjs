@@ -32,9 +32,10 @@ const emptyStatus: LogStatus = {
 
 interface LoggingPanelProps {
   onLogStopped?: () => void;
+  pausePolling?: boolean;
 }
 
-export default function LoggingPanel({ onLogStopped }: LoggingPanelProps) {
+export default function LoggingPanel({ onLogStopped, pausePolling }: LoggingPanelProps) {
   const [status, setStatus] = useState<LogStatus>(emptyStatus);
   const [label, setLabel] = useState('');
   const [isBusy, setIsBusy] = useState(false);
@@ -67,14 +68,19 @@ export default function LoggingPanel({ onLogStopped }: LoggingPanelProps) {
     }
   };
 
-  // Poll status every 2 seconds
+  // Poll status every 2 seconds (paused during file downloads)
   useEffect(() => {
+    if (pausePolling) {
+      if (pollTimerRef.current) clearInterval(pollTimerRef.current);
+      pollTimerRef.current = null;
+      return;
+    }
     fetchStatus();
     pollTimerRef.current = setInterval(fetchStatus, 2000);
     return () => {
       if (pollTimerRef.current) clearInterval(pollTimerRef.current);
     };
-  }, []);
+  }, [pausePolling]);
 
   const handleStart = async () => {
     setIsBusy(true);
