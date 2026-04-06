@@ -13,6 +13,7 @@ import RaftMsgHandler from './RaftMsgHandler';
 import {
   RaftFileDownloadResult,
   RaftFileDownloadStartResp,
+  RaftFileDownloadEndResp,
   RaftFileSendType,
   RaftFileStartResp,
   RaftOKFail,
@@ -454,8 +455,9 @@ export default class RaftFileHandler {
     // Send contents
     const fileContents = await this._receiveFileContents(progressCallback, bridgeID);
 
-    // Send file end
-    await this._receiveFileEnd(fileName, bridgeID);
+    // Send file end (and verify deferred CRC if applicable)
+    if (!await this._receiveFileEnd(fileName, bridgeID))
+      return new RaftFileDownloadResult();
 
     // Clean up
     await this.awaitOutstandingMsgPromises(true);
@@ -476,9 +478,11 @@ export default class RaftFileHandler {
 
     // Request file transfer
     // Frames follow the approach used in the web interface start, block..., end
+    // crcAt:end requests the server to defer CRC computation (non-blocking start)
     const cmdMsg = `{"cmdName":"dfStart","reqStr":"getFile","fileType":"${fileSrc}",` +
                     `"batchMsgSize":${blockMaxSizeRequested},` +
                     `"batchAckSize":${batchAckSizeRequested},` +
+                    `"crcAt":"end",` +
                     `"fileName":"${fileName}"}`
 
     // Send
@@ -499,7 +503,8 @@ export default class RaftFileHandler {
       this._fileRxBatchAckSize = cmdResp.batchAckSize;
       this._fileRxStreamID = cmdResp.streamID;
       this._fileRxFileLen = cmdResp.fileLen;
-      this._fileRxCrc16 = parseInt(cmdResp.crc16, 16);
+      // CRC may be provided at start (old firmware) or deferred to dfEnd (new firmware)
+      this._fileRxCrc16 = cmdResp.crc16 ? parseInt(cmdResp.crc16, 16) : -1;
       this._fileRxBuffer = new Uint8Array(0);
       this._fileRxLastAckTime = 0;
       this._fileRxLastAckPos = 0;
@@ -539,14 +544,16 @@ export default class RaftFileHandler {
             progressCallback(this._fileRxBuffer.length, this._fileRxFileLen);
           }
 
-          // Check CRC
-          const crc16 = RaftMiniHDLC.crc16(this._fileRxBuffer);
-          if (crc16 !== this._fileRxCrc16) {
-            RaftLog.warn(`_receiveFileContents - CRC error ${crc16} ${this._fileRxCrc16}`);
-            reject(new Error('fileReceive CRC error'));
-            return;
-          } else {
-            RaftLog.info(`_receiveFileContents - CRC OK ${crc16} ${this._fileRxCrc16}`);
+          // Check CRC if it was provided at start (old firmware)
+          if (this._fileRxCrc16 >= 0) {
+            const crc16 = RaftMiniHDLC.crc16(this._fileRxBuffer);
+            if (crc16 !== this._fileRxCrc16) {
+              RaftLog.warn(`_receiveFileContents - CRC error ${crc16} ${this._fileRxCrc16}`);
+              reject(new Error('fileReceive CRC error'));
+              return;
+            } else {
+              RaftLog.info(`_receiveFileContents - CRC OK ${crc16} ${this._fileRxCrc16}`);
+            }
           }
           resolve(new RaftFileDownloadResult(this._fileRxBuffer));
           return;
@@ -626,18 +633,39 @@ export default class RaftFileHandler {
 
   async _receiveFileEnd(fileName: string, bridgeID: number | undefined): Promise<boolean> {
 
-    // Send file end message
-    const cmdMsg = `{"cmdName":"dfAck","reqStr":"getFile","okto":${this._fileRxBuffer.length},` +
-          `"fileName":"${fileName}","streamID":${this._fileRxStreamID},"rslt":"ok"}`
-    this._msgHandler.sendRICRESTNoResp(
-      cmdMsg,
-      RICRESTElemCode.RICREST_ELEM_CODE_COMMAND_FRAME,
-      bridgeID
-    );
+    // Send dfEnd and wait for response (may contain deferred CRC)
+    const cmdMsg = `{"cmdName":"dfEnd","reqStr":"getFile",` +
+          `"fileName":"${fileName}","fileLen":${this._fileRxBuffer.length},` +
+          `"streamID":${this._fileRxStreamID}}`
+
+    let cmdResp = null;
+    try {
+      cmdResp = await this._msgHandler.sendRICREST<RaftFileDownloadEndResp>(
+        cmdMsg,
+        RICRESTElemCode.RICREST_ELEM_CODE_COMMAND_FRAME,
+        bridgeID,
+      );
+    } catch (err) {
+      RaftLog.warn(`_receiveFileEnd error ${err}`);
+      this._fileRxActive = false;
+      return false;
+    }
+
+    // Check deferred CRC if start response didn't include one
+    if (this._fileRxCrc16 < 0 && cmdResp.crc16) {
+      const expectedCrc = parseInt(cmdResp.crc16, 16);
+      const actualCrc = RaftMiniHDLC.crc16(this._fileRxBuffer);
+      if (actualCrc !== expectedCrc) {
+        RaftLog.warn(`_receiveFileEnd - CRC error actual=${actualCrc} expected=${expectedCrc}`);
+        this._fileRxActive = false;
+        return false;
+      }
+      RaftLog.info(`_receiveFileEnd - CRC OK ${actualCrc}`);
+    }
 
     // No longer active
     this._fileRxActive = false;
-    return false;
+    return true;
   }
 
   async _sendFileRxCancelMsg(bridgeID: number | undefined): Promise<void> {

@@ -237,7 +237,13 @@ export type RaftFileDownloadStartResp = {
   batchAckSize: number;
   streamID: number;
   fileLen: number;
-  crc16: string;
+  crc16?: string;
+}
+
+export type RaftFileDownloadEndResp = {
+  req: string;
+  rslt: string;
+  crc16?: string;
 }
 
 export interface Dictionary<T> {
