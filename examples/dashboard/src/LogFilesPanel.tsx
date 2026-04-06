@@ -29,7 +29,7 @@ export default function LogFilesPanel({ refreshTrigger, onDownloadActiveChange }
         'filelist/local/logs', {}
       );
       const fileList = typeof resp === 'string' ? JSON.parse(resp) : resp;
-      setFiles(fileList.files || []);
+      setFiles((fileList.files || []).sort((a: {name: string}, b: {name: string}) => b.name.localeCompare(a.name)));
       setDiskSize(fileList.diskSize || 0);
       setDiskUsed(fileList.diskUsed || 0);
     } catch (e) {
