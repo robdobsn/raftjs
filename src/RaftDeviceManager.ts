@@ -931,7 +931,26 @@ export class DeviceManager implements RaftDeviceMgrIF{
         // Find the _conf.rate action
         const confRateAction = typeInfo.actions?.find(a => a.n === '_conf.rate');
         if (!confRateAction?.map) {
-            return { ok: false, requestedRateHz: sampleRateHz, actualRateHz: 0, intervalUs: 0, numSamples: 0, error: 'Device does not have a _conf.rate action with a rate map' };
+            // No _conf.rate action — use generic sample rate setting
+            // Non-FIFO devices: poll once per sample period, 1 sample per read
+            const samplePeriodUs = Math.round(1000000 / sampleRateHz);
+            const numSamples = options?.numSamples ?? 1;
+            const intervalUs = options?.intervalUs ?? Math.max(5000, samplePeriodUs);
+
+            const { bus: devBus, addr: devAddr } = parseDeviceKey(deviceKey);
+            const cmd = `devman/devconfig?bus=${devBus}&addr=${devAddr}&intervalUs=${intervalUs}&numSamples=${numSamples}`;
+
+            try {
+                const msgHandler = this._systemUtils?.getMsgHandler();
+                if (!msgHandler) {
+                    return { ok: false, requestedRateHz: sampleRateHz, actualRateHz: sampleRateHz, intervalUs, numSamples, error: 'No message handler available' };
+                }
+                const msgRslt = await msgHandler.sendRICRESTURL<RaftOKFail>(cmd);
+                const ok = msgRslt.rslt === 'ok';
+                return { ok, requestedRateHz: sampleRateHz, actualRateHz: sampleRateHz, intervalUs, numSamples, error: ok ? undefined : `Firmware returned: ${msgRslt.rslt}` };
+            } catch (error) {
+                return { ok: false, requestedRateHz: sampleRateHz, actualRateHz: sampleRateHz, intervalUs, numSamples, error: `${error}` };
+            }
         }
 
         // Find the closest supported rate from the map keys

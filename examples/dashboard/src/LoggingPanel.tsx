@@ -43,6 +43,7 @@ export default function LoggingPanel({ onLogStopped, pausePolling, logConfig }: 
   const [isBusy, setIsBusy] = useState(false);
   const [lastError, setLastError] = useState('');
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const wasLoggingRef = useRef(false);
 
   const fetchStatus = async () => {
     if (!connManager.getConnector().isConnected()) return;
@@ -53,8 +54,9 @@ export default function LoggingPanel({ onLogStopped, pausePolling, logConfig }: 
       if (resp && typeof resp === 'object') {
         const r = resp as any;
         const flushLatency = r.flushLatency ?? {};
+        const nowLogging = r.active ?? false;
         setStatus({
-          isLogging: r.active ?? false,
+          isLogging: nowLogging,
           fileName: r.fileName ?? '',
           elapsedSecs: (r.durationMs ?? 0) / 1000,
           bytesWritten: r.totalBytesWritten ?? 0,
@@ -65,6 +67,11 @@ export default function LoggingPanel({ onLogStopped, pausePolling, logConfig }: 
           maxWriteMs: (flushLatency.maxUs ?? 0) / 1000,
           bytesPerSec: r.bytesPerSec ?? 0,
         });
+        // Detect timed logging session that finished on its own
+        if (wasLoggingRef.current && !nowLogging) {
+          onLogStopped?.();
+        }
+        wasLoggingRef.current = nowLogging;
       }
     } catch (e) {
       console.warn('Failed to fetch logging status', e);

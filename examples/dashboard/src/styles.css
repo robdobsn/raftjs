@@ -94,10 +94,19 @@ h1 {
     gap: 10px;
 }
 
+.connection-info {
+    flex: 0 0 auto;
+    max-width: 140px;
+}
+
+.connection-info .info-box {
+    padding: 8px 12px;
+}
+
 .connected-panel {
     display: flex;
     justify-content: flex-start;
-    gap: 20px;
+    gap: 10px;
     align-items: stretch;
     flex-direction: row;
     width: 100%;

@@ -1,9 +1,19 @@
 import React, { useEffect, useRef, useState } from 'react';
 import ConnManager from './ConnManager';
-import { DeviceTypeAction } from '../../../src/RaftDeviceInfo';
+import { DeviceTypeAction, ActionMapEntry } from '../../../src/RaftDeviceInfo';
 import DispLEDGrid from './DispLedGrid';
 
 const connManager = ConnManager.getInstance();
+
+// Generic sample rate options for devices without _conf.rate
+const GENERIC_SAMPLE_RATES = [50, 20, 10, 5, 2, 1, 0.5, 0.2, 0.1, 0.01, 0.001];
+
+// Find the closest value in an array to a target
+function findClosest(arr: number[], target: number): number {
+    return arr.reduce((prev, curr) =>
+        Math.abs(curr - target) < Math.abs(prev - target) ? curr : prev
+    );
+}
 
 type DeviceActionsTableProps = {
     deviceKey: string;
@@ -18,18 +28,28 @@ const DeviceActionsForm: React.FC<DeviceActionsTableProps> = ({ deviceKey }: Dev
     const [deviceActions, setDeviceActions] = useState<DeviceTypeAction[]>([]);
     const [inputValues, setInputValues] = useState<InputValues>({});
     const [actionStatus, setActionStatus] = useState<string>('');
+    const [genericRateHz, setGenericRateHz] = useState<number>(10);
+    const [isBusDevice, setIsBusDevice] = useState<boolean>(false);
+    const [hasConfRate, setHasConfRate] = useState<boolean>(false);
 
     useEffect(() => {
         if (!deviceManager) {
             return;
         }
         // Wait a little while inline for the device to be ready
-        setTimeout(() => {
+        setTimeout(async () => {
             const deviceState = deviceManager.getDeviceState(deviceKey);
             const { deviceTypeInfo } = deviceState;
             const actions: DeviceTypeAction[] = deviceTypeInfo?.actions || [];
             setDeviceActions(actions);
-            // Initialize input values
+            // Check if this is a bus device (has a valid busName)
+            const busName = deviceState?.busName ?? '';
+            const isBus = busName !== '' && busName !== '0';
+            setIsBusDevice(isBus);
+            // Check if device has _conf.rate action
+            const confRateAction = actions.find(a => a.n === '_conf.rate');
+            setHasConfRate(!!confRateAction);
+            // Initialize input values with defaults
             const initialValues: InputValues = actions.reduce((acc, action) => {
                 acc[action.n] =
                     action.d ??
@@ -40,6 +60,47 @@ const DeviceActionsForm: React.FC<DeviceActionsTableProps> = ({ deviceKey }: Dev
                         : 0);
                 return acc;
             }, {} as InputValues);
+
+            // Query current poll config from firmware to initialize rate dropdowns
+            if (isBus && deviceState?.deviceAddress) {
+                try {
+                    const cmd = `devman/devconfig?bus=${busName}&addr=${deviceState.deviceAddress}`;
+                    const resp = await connManager.getConnector().sendRICRESTMsg(cmd, {}) as any;
+                    if (resp?.rslt === 'ok' && resp.pollIntervalUs > 0) {
+                        const currentRateHz = 1000000 / resp.pollIntervalUs;
+                        if (confRateAction?.map) {
+                            // For _conf.rate: find the map key whose interval and numSamples
+                            // best match the current config (both i and s needed to disambiguate
+                            // e.g. 52Hz and 104Hz both use i=50000 but differ in s)
+                            let bestKey = String(confRateAction.d ?? '');
+                            let bestDist = Infinity;
+                            for (const [key, entry] of Object.entries(confRateAction.map)) {
+                                const mapEntry = entry as ActionMapEntry;
+                                if (mapEntry.i !== undefined) {
+                                    let dist = Math.abs(mapEntry.i - resp.pollIntervalUs);
+                                    // Add penalty for numSamples mismatch to disambiguate entries with same interval
+                                    if (mapEntry.s !== undefined && resp.numSamples !== undefined) {
+                                        dist += Math.abs(mapEntry.s - resp.numSamples) * 1000000;
+                                    }
+                                    if (dist < bestDist) {
+                                        bestDist = dist;
+                                        bestKey = key;
+                                    }
+                                }
+                            }
+                            if (bestKey) {
+                                initialValues['_conf.rate'] = parseFloat(bestKey);
+                            }
+                        } else {
+                            // For generic rate dropdown: find closest option
+                            setGenericRateHz(findClosest(GENERIC_SAMPLE_RATES, currentRateHz));
+                        }
+                    }
+                } catch (err) {
+                    // Ignore query errors — keep defaults
+                }
+            }
+
             setInputValues(initialValues);
         }, 1000);
     }, [deviceKey]);
@@ -71,7 +132,24 @@ const DeviceActionsForm: React.FC<DeviceActionsTableProps> = ({ deviceKey }: Dev
         }
     };
 
-    if (deviceActions.length === 0) {
+    const handleGenericRateSend = async () => {
+        if (!deviceManager) {
+            return;
+        }
+        setActionStatus('Setting sample rate...');
+        const result = await deviceManager.setSampleRate(deviceKey, genericRateHz);
+        if (result.ok) {
+            setActionStatus(`Rate: ${result.actualRateHz} Hz, poll: ${result.intervalUs} µs, buf: ${result.numSamples}`);
+        } else {
+            setActionStatus(`Error: ${result.error}`);
+        }
+        setTimeout(() => setActionStatus(''), 5000);
+    };
+
+    // Show generic rate control for bus devices without _conf.rate
+    const showGenericRate = isBusDevice && !hasConfRate;
+
+    if (deviceActions.length === 0 && !showGenericRate) {
         return <></>;
     }
 
@@ -103,9 +181,11 @@ const DeviceActionsForm: React.FC<DeviceActionsTableProps> = ({ deviceKey }: Dev
                             );
                         } else if (action.map) {
                             const mapKeys = Object.keys(action.map).sort((a, b) => parseFloat(a) - parseFloat(b));
+                            // Use "Rate Hz" label for _conf.rate actions
+                            const actionLabel = action.n === '_conf.rate' ? 'Rate Hz' : (action.desc ?? action.n);
                             return (
                                 <tr key={action.n}>
-                                    <td>{action.desc ?? action.n}</td>
+                                    <td>{actionLabel}</td>
                                     <td>
                                         <select
                                             value={inputValues[action.n]}
@@ -173,6 +253,26 @@ const DeviceActionsForm: React.FC<DeviceActionsTableProps> = ({ deviceKey }: Dev
                             );
                         }
                     })}
+                    {showGenericRate && (
+                        <tr key="__generic_rate">
+                            <td>Rate Hz</td>
+                            <td>
+                                <select
+                                    value={genericRateHz}
+                                    onChange={(e) => setGenericRateHz(parseFloat(e.target.value))}
+                                >
+                                    {GENERIC_SAMPLE_RATES.map((rate) => (
+                                        <option key={rate} value={rate}>
+                                            {rate >= 1 ? `${rate} Hz` : `${rate} Hz`}
+                                        </option>
+                                    ))}
+                                </select>
+                            </td>
+                            <td>
+                                <button onClick={handleGenericRateSend}>Send</button>
+                            </td>
+                        </tr>
+                    )}
                 </tbody>
             </table>
             {actionStatus && <div className="action-status">{actionStatus}</div>}

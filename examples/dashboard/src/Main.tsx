@@ -155,7 +155,7 @@ export default function Main() {
             {connectionStatus === RaftConnEvent.CONN_CONNECTED ? (
               <>
                 <div className="connected-panel">
-                  <div className="info-boxes">
+                  <div className="info-boxes connection-info">
                     <div className="info-box">
                       <div className="conn-indication">
                         <h3>Connected via {connManager.getConnector().getConnMethod() || 'Unknown'}</h3>
