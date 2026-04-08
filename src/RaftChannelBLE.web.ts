@@ -49,6 +49,11 @@ export default class RaftChannelBLE implements RaftChannel {
   private _requestedBatchAckSize = 10;
   private _requestedFileBlockSize = 500;
 
+  // Max bytes per BLE write - messages larger than this are split into chunks.
+  // Web Bluetooth doesn't expose the negotiated MTU, so use a conservative
+  // default that works with BLE 4.2+ (ATT_MTU 251 → payload 244).
+  private _maxBleWriteSize = 244;
+
   fhBatchAckSize(): number {
     return this._requestedBatchAckSize;
   }
@@ -286,7 +291,20 @@ export default class RaftChannelBLE implements RaftChannel {
     }
   }
 
-  // Send a message
+  // Write a single chunk to the BLE characteristic
+  private async _writeChunk(data: Uint8Array): Promise<void> {
+    if (!this._characteristicTx) return;
+    const bs = RaftUtils.toBufferSource(data);
+    if (this._characteristicTx.writeValueWithoutResponse) {
+      await this._characteristicTx.writeValueWithoutResponse(bs);
+    } else if (this._characteristicTx.writeValue) {
+      await this._characteristicTx.writeValue(bs);
+    } else if (this._characteristicTx.writeValueWithResponse) {
+      await this._characteristicTx.writeValueWithResponse(bs);
+    }
+  }
+
+  // Send a message, chunking if it exceeds the BLE write size
   async sendTxMsg(
     msg: Uint8Array
     //    _sendWithResponse: boolean
@@ -304,16 +322,16 @@ export default class RaftChannelBLE implements RaftChannel {
       }
       this._msgTxTimeLast = Date.now();
 
-      // Write to the characteristic
+      // Write to the characteristic, chunking if necessary
       try {
         if (this._characteristicTx) {
-          const bs = RaftUtils.toBufferSource(msg);
-          if (this._characteristicTx.writeValueWithoutResponse) {
-            await this._characteristicTx.writeValueWithoutResponse(bs);
-          } else if (this._characteristicTx.writeValue) {
-            await this._characteristicTx.writeValue(bs);
-          } else if (this._characteristicTx.writeValueWithResponse) {
-            await this._characteristicTx.writeValueWithResponse(bs);
+          if (msg.length <= this._maxBleWriteSize) {
+            await this._writeChunk(msg);
+          } else {
+            for (let offset = 0; offset < msg.length; offset += this._maxBleWriteSize) {
+              const chunk = msg.subarray(offset, Math.min(offset + this._maxBleWriteSize, msg.length));
+              await this._writeChunk(chunk);
+            }
           }
         }
         break;
@@ -344,15 +362,17 @@ export default class RaftChannelBLE implements RaftChannel {
     }
     this._msgTxTimeLast = Date.now();
 
-    // Write to the characteristic
+    // Write to the characteristic, chunking if necessary
     if (this._characteristicTx) {
-      const bs = RaftUtils.toBufferSource(msg);
-      if (this._characteristicTx.writeValueWithoutResponse) {
-        this._characteristicTx.writeValueWithoutResponse(bs);
-      } else if (this._characteristicTx.writeValue) {
-        this._characteristicTx.writeValue(bs);
-      } else if (this._characteristicTx.writeValueWithResponse) {
-        this._characteristicTx.writeValueWithResponse(bs);
+      if (msg.length <= this._maxBleWriteSize) {
+        this._writeChunk(msg);
+      } else {
+        (async () => {
+          for (let offset = 0; offset < msg.length; offset += this._maxBleWriteSize) {
+            const chunk = msg.subarray(offset, Math.min(offset + this._maxBleWriteSize, msg.length));
+            await this._writeChunk(chunk);
+          }
+        })();
       }
       return true;
     }

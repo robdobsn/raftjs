@@ -4,6 +4,13 @@ import { LogConfig } from './LogConfigPanel';
 import { getHostPosixTZ } from '../../../src/RaftTimezone';
 import './styles.css';
 
+// Minimal query-value encoder: only encode characters that break query string parsing.
+// Unlike encodeURIComponent (which encodes ~40 chars), this keeps JSON, colons, commas
+// etc. as-is, significantly reducing message size for BLE transport.
+function encodeQueryValue(s: string): string {
+  return s.replace(/%/g, '%25').replace(/&/g, '%26').replace(/=/g, '%3D');
+}
+
 const connManager = ConnManager.getInstance();
 
 interface LogStatus {
@@ -97,15 +104,15 @@ export default function LoggingPanel({ onLogStopped, pausePolling, logConfig }: 
     setIsBusy(true);
     setLastError('');
     try {
-      const labelParam = label.trim() ? `&label=${encodeURIComponent(label.trim())}` : '';
+      const labelParam = label.trim() ? `&label=${encodeQueryValue(label.trim())}` : '';
       let configParam = '';
       if (logConfig && logConfig.devices.length > 0) {
-        configParam = `&config=${encodeURIComponent(JSON.stringify(logConfig))}`;
+        configParam = `&config=${encodeQueryValue(JSON.stringify(logConfig))}`;
       }
       // Include current UTC time so firmware can timestamp the log even without NTP
-      const utcParam = `&UTC=${encodeURIComponent(new Date().toISOString().replace(/\\.\\d{3}Z$/, 'Z'))}`;
+      const utcParam = `&UTC=${encodeQueryValue(new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'))}`;
       const posixTZ = getHostPosixTZ();
-      const tzParam = posixTZ ? `&tz=${encodeURIComponent(posixTZ)}` : '';
+      const tzParam = posixTZ ? `&tz=${encodeQueryValue(posixTZ)}` : '';
       const resp = await connManager.getConnector().sendRICRESTMsg(
         `datalog?action=start${labelParam}${configParam}${utcParam}${tzParam}`, {}
       );
