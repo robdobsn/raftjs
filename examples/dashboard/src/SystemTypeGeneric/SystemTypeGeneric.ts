@@ -40,7 +40,7 @@ export default class SystemTypeGeneric implements RaftSystemType {
     // Subscribe for updates
     subscribeForUpdates: RaftSubscribeForUpdatesCBType | null = async (systemUtils: RaftSystemUtils, enable: boolean) => {
       // Subscription rate — must be high enough to match max polling rate
-      const subscribeRateHz = 50;
+      const subscribeRateHz = 0.1;
       try {
         const topic = SUBSCRIBE_BINARY_MSGS ? "devbin" : "devjson";
         const subscribeDisable = '{"cmdName":"subscription","action":"update",' +
