@@ -23,8 +23,7 @@ import { RaftConnEvent, RaftConnEventNames } from "./RaftConnEvents";
 import { RaftGetSystemTypeCBType, RaftSystemType } from "./RaftSystemType";
 import { RaftUpdateEvent, RaftUpdateEventNames } from "./RaftUpdateEvents";
 import RaftUpdateManager from "./RaftUpdateManager";
-import { createBLEChannel } from "./RaftChannelBLEFactory";
-
+import { createBLEChannel } from "./RaftChannelBLEFactory";import { getHostPosixTZ } from './RaftTimezone';
 
 export default class RaftConnector {
 
@@ -333,8 +332,13 @@ export default class RaftConnector {
         try {
           const now = new Date();
           const utc = now.toISOString().replace(/\.\d{3}Z$/, 'Z');
-          await this.sendRICRESTMsg('datetime', { UTC: utc });
-          RaftLog.info(`connect synced time to device: ${utc}`);
+          const params: Record<string, string> = { UTC: utc };
+          const posixTZ = getHostPosixTZ();
+          if (posixTZ) {
+            params.tz = posixTZ;
+          }
+          await this.sendRICRESTMsg('datetime', params);
+          RaftLog.info(`connect synced time to device: ${utc}${posixTZ ? ` tz=${posixTZ}` : ''}`);
         } catch (error) {
           RaftLog.warn(`connect time sync failed: ${error}`);
         }

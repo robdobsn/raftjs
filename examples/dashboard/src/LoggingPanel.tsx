@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import ConnManager from './ConnManager';
 import { LogConfig } from './LogConfigPanel';
+import { getHostPosixTZ } from 'raftjs';
 import './styles.css';
 
 const connManager = ConnManager.getInstance();
@@ -103,8 +104,10 @@ export default function LoggingPanel({ onLogStopped, pausePolling, logConfig }: 
       }
       // Include current UTC time so firmware can timestamp the log even without NTP
       const utcParam = `&UTC=${encodeURIComponent(new Date().toISOString().replace(/\\.\\d{3}Z$/, 'Z'))}`;
+      const posixTZ = getHostPosixTZ();
+      const tzParam = posixTZ ? `&tz=${encodeURIComponent(posixTZ)}` : '';
       const resp = await connManager.getConnector().sendRICRESTMsg(
-        `datalog?action=start${labelParam}${configParam}${utcParam}`, {}
+        `datalog?action=start${labelParam}${configParam}${utcParam}${tzParam}`, {}
       );
       const r = resp as any;
       if (r?.rslt !== 'ok') {

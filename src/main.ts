@@ -38,3 +38,4 @@ export * from './RaftUpdateEvents';
 export * from "./RaftProtocolDefs";
 export * from "./RaftDeviceStates";
 export * from "./RaftDeviceInfo";
+export { getHostTimezone, getHostPosixTZ, ianaToPosixTZ } from './RaftTimezone';
