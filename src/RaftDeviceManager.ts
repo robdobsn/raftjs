@@ -390,7 +390,12 @@ export class DeviceManager implements RaftDeviceMgrIF{
                             timestampsUs: [],
                             lastReportTimestampUs: 0,
                             reportTimestampOffsetUs: 0,
-                            totalSamplesAdded: 0
+                            totalSamplesAdded: 0,
+                            emaLastSampleTimeUs: 0,
+                            emaIntervalUs: 0,
+                            emaPrevPollTimeUs: 0,
+                            emaCalibrated: false,
+                            emaCalibrationPolls: 0
                         },
                         deviceAttributes: {},
                         deviceIsNew: true,
@@ -553,7 +558,12 @@ export class DeviceManager implements RaftDeviceMgrIF{
                                 timestampsUs: [],
                                 lastReportTimestampUs: 0,
                                 reportTimestampOffsetUs: 0,
-                                totalSamplesAdded: 0
+                                totalSamplesAdded: 0,
+                                emaLastSampleTimeUs: 0,
+                                emaIntervalUs: 0,
+                                emaPrevPollTimeUs: 0,
+                                emaCalibrated: false,
+                                emaCalibrationPolls: 0
                             },
                             deviceAttributes: {},
                             deviceIsNew: true,

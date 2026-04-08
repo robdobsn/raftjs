@@ -46,7 +46,13 @@ export class RICStateInfo implements RaftDeviceMgrIF {
             deviceTimeline: {
                 timestampsUs: [],
                 lastReportTimestampUs: 0,
-                reportTimestampOffsetUs: 0
+                reportTimestampOffsetUs: 0,
+                totalSamplesAdded: 0,
+                emaLastSampleTimeUs: 0,
+                emaIntervalUs: 0,
+                emaPrevPollTimeUs: 0,
+                emaCalibrated: false,
+                emaCalibrationPolls: 0
             },
             deviceAttributes: {},
             deviceIsNew: false,

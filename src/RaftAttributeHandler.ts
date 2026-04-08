@@ -20,7 +20,7 @@ export default class AttributeHandler {
     // Message timestamp size
     private POLL_RESULT_TIMESTAMP_SIZE = 2;
     private POLL_RESULT_WRAP_VALUE = this.POLL_RESULT_TIMESTAMP_SIZE === 2 ? 65536 : 4294967296;
-    private POLL_RESULT_RESOLUTION_US = 1000;
+    private POLL_RESULT_RESOLUTION_US = 100;
     
     public processMsgAttrGroup(msgBuffer: Uint8Array, msgBufIdx: number, deviceTimeline: DeviceTimeline, pollRespMetadata: DeviceTypePollRespMetadata, 
                         devAttrsState: DeviceAttributesState, maxDataPoints: number): number {
@@ -156,15 +156,37 @@ export default class AttributeHandler {
             devAttrsState[attrDef.n].numNewValues = newAttrValues[attrIdx].length;
         }
 
-        // Handle the timestamps with increments if specified
+        // --- Piecewise EMA timestamp reconstruction ---
+        // Track the last assigned sample timestamp and step forward by emaIntervalUs
+        // per sample. No T0 recomputation — avoids amplified batch-boundary jitter.
         const timeIncUs: number = pollRespMetadata.us ? pollRespMetadata.us : 1000;
+
+        if (!deviceTimeline.emaCalibrated) {
+            // Cold start: anchor so that sample 0 gets the poll timestamp
+            deviceTimeline.emaIntervalUs = timeIncUs;
+            deviceTimeline.emaLastSampleTimeUs = timestampUs - deviceTimeline.emaIntervalUs;
+            deviceTimeline.emaPrevPollTimeUs = timestampUs;
+            deviceTimeline.emaCalibrated = true;
+            deviceTimeline.emaCalibrationPolls = 1;
+        } else {
+            // EMA interval update from poll-to-poll gap
+            if (numNewDataPoints > 1) {
+                const instantIntervalUs = (timestampUs - deviceTimeline.emaPrevPollTimeUs) / numNewDataPoints;
+                const alpha = deviceTimeline.emaCalibrationPolls < 20 ? 0.3 : 0.05;
+                deviceTimeline.emaIntervalUs = alpha * instantIntervalUs
+                                              + (1.0 - alpha) * deviceTimeline.emaIntervalUs;
+            }
+            deviceTimeline.emaPrevPollTimeUs = timestampUs;
+            deviceTimeline.emaCalibrationPolls++;
+        }
+
+        // Assign timestamps: each sample steps forward by emaIntervalUs
         const timestampsUs = Array(numNewDataPoints).fill(0);
-        // Get the last timestamp in the timeline to ensure monotonicity
         const lastTimeUs = deviceTimeline.timestampsUs.length > 0 
             ? deviceTimeline.timestampsUs[deviceTimeline.timestampsUs.length - 1] 
             : -Infinity;
         for (let i = 0; i < numNewDataPoints; i++) {
-            timestampsUs[i] = timestampUs + i * timeIncUs;
+            timestampsUs[i] = deviceTimeline.emaLastSampleTimeUs + (i + 1) * deviceTimeline.emaIntervalUs;
             // Ensure monotonically increasing timestamps
             if (i === 0 && timestampsUs[0] <= lastTimeUs) {
                 timestampsUs[0] = lastTimeUs + 1;
@@ -172,7 +194,11 @@ export default class AttributeHandler {
                 timestampsUs[i] = timestampsUs[i - 1] + 1;
             }
         }
-        
+        // Advance the piecewise model cursor past all samples in this batch
+        if (deviceTimeline.emaCalibrated && numNewDataPoints > 0) {
+            deviceTimeline.emaLastSampleTimeUs += numNewDataPoints * deviceTimeline.emaIntervalUs;
+        }
+
         // Check if timeline points need to be discarded
         const discardCount = Math.max(0, deviceTimeline.timestampsUs.length + timestampsUs.length - maxDataPoints);
         if (discardCount > 0) {
@@ -435,7 +461,7 @@ export default class AttributeHandler {
         }
 
         // Check if time is before lastReportTimeMs by more than 100ms - in which case a wrap around occurred to add on the max value
-        if (timestampUs + 100000 < timestampWrapHandler.lastReportTimestampUs ) {
+        if (timestampUs + 10000 < timestampWrapHandler.lastReportTimestampUs ) {
             timestampWrapHandler.reportTimestampOffsetUs += this.POLL_RESULT_WRAP_VALUE * this.POLL_RESULT_RESOLUTION_US;
         }
         timestampWrapHandler.lastReportTimestampUs = timestampUs;

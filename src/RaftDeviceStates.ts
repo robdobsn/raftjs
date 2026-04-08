@@ -73,6 +73,12 @@ export interface DeviceTimeline {
     lastReportTimestampUs: number;
     reportTimestampOffsetUs: number;
     totalSamplesAdded: number;
+    // Piecewise EMA timestamp reconstruction state
+    emaLastSampleTimeUs: number;
+    emaIntervalUs: number;
+    emaPrevPollTimeUs: number;
+    emaCalibrated: boolean;
+    emaCalibrationPolls: number;
 }
 
 export interface DeviceStats {
