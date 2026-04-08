@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import ConnManager from './ConnManager';
 import { LogConfig } from './LogConfigPanel';
-import { getHostPosixTZ } from 'raftjs';
+import { getHostPosixTZ } from '../../../src/RaftTimezone';
 import './styles.css';
 
 const connManager = ConnManager.getInstance();
