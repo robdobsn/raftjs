@@ -15,6 +15,20 @@ function findClosest(arr: number[], target: number): number {
     );
 }
 
+function getDefaultActionValue(action: DeviceTypeAction): number {
+    if (action.d !== undefined) {
+        return action.d;
+    }
+    if (action.map) {
+        const firstMapKey = Object.keys(action.map).sort((a, b) => parseFloat(a) - parseFloat(b))[0];
+        return firstMapKey !== undefined ? parseFloat(firstMapKey) : 0;
+    }
+    if (action.r && action.r.length > 1) {
+        return (action.r[1] + action.r[0]) / 2;
+    }
+    return 0;
+}
+
 type DeviceActionsTableProps = {
     deviceKey: string;
 };
@@ -51,13 +65,7 @@ const DeviceActionsForm: React.FC<DeviceActionsTableProps> = ({ deviceKey }: Dev
             setHasConfRate(!!confRateAction);
             // Initialize input values with defaults
             const initialValues: InputValues = actions.reduce((acc, action) => {
-                acc[action.n] =
-                    action.d ??
-                    (action.r
-                        ? action.r.length > 1
-                            ? (action.r[1] + action.r[0]) / 2
-                            : 0
-                        : 0);
+                acc[action.n] = getDefaultActionValue(action);
                 return acc;
             }, {} as InputValues);
 
@@ -183,12 +191,13 @@ const DeviceActionsForm: React.FC<DeviceActionsTableProps> = ({ deviceKey }: Dev
                             const mapKeys = Object.keys(action.map).sort((a, b) => parseFloat(a) - parseFloat(b));
                             // Use "Rate Hz" label for _conf.rate actions
                             const actionLabel = action.n === '_conf.rate' ? 'Rate Hz' : (action.desc ?? action.n);
+                            const actionValue = inputValues[action.n] ?? getDefaultActionValue(action);
                             return (
                                 <tr key={action.n}>
                                     <td>{actionLabel}</td>
                                     <td>
                                         <select
-                                            value={inputValues[action.n]}
+                                            value={actionValue}
                                             onChange={(e) =>
                                                 handleInputChange(
                                                     action.n,
@@ -208,7 +217,7 @@ const DeviceActionsForm: React.FC<DeviceActionsTableProps> = ({ deviceKey }: Dev
                                             onClick={() =>
                                                 handleSendAction(
                                                     action,
-                                                    inputValues[action.n]
+                                                    actionValue
                                                 )
                                             }
                                         >
@@ -218,6 +227,7 @@ const DeviceActionsForm: React.FC<DeviceActionsTableProps> = ({ deviceKey }: Dev
                                 </tr>
                             );
                         } else {
+                            const actionValue = inputValues[action.n] ?? getDefaultActionValue(action);
                             return (
                                 <tr key={action.n}>
                                     <td>{action.n}</td>
@@ -227,7 +237,7 @@ const DeviceActionsForm: React.FC<DeviceActionsTableProps> = ({ deviceKey }: Dev
                                                 type="number"
                                                 min={action.r?.[0] ?? 0}
                                                 max={action.r?.[1] ?? 100}
-                                                value={inputValues[action.n]}
+                                                value={actionValue}
                                                 onChange={(e) =>
                                                     handleInputChange(
                                                         action.n,
@@ -242,7 +252,7 @@ const DeviceActionsForm: React.FC<DeviceActionsTableProps> = ({ deviceKey }: Dev
                                             onClick={() =>
                                                 handleSendAction(
                                                     action,
-                                                    inputValues[action.n]
+                                                    actionValue
                                                 )
                                             }
                                         >
