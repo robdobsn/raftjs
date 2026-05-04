@@ -65,6 +65,7 @@ export default class RaftFileHandler {
   private _ackedFilePos = 0;
   private _batchAckReceived = false;
   private _isTxCancelled = false;
+  private _fileTxStreamID = 0;
 
   // File receive info
   private _isRxCancelled = false;
@@ -78,7 +79,6 @@ export default class RaftFileHandler {
   private _fileRxLastAckTime = 0;
   private _fileRxLastBlockTime = 0;
   private _fileRxLastAckPos = 0;
-  private OVERALL_FILE_TRANSFER_TIMEOUT_MS = 100000;
   private FILE_RX_ACK_RESEND_TIMEOUT_MS = 1000;
 
   // RaftCommsStats
@@ -111,6 +111,7 @@ export default class RaftFileHandler {
     progressCallback: ((sent: number, total: number, progress: number) => void) | undefined,
   ): Promise<boolean> {
     this._isTxCancelled = false;
+    this._fileTxStreamID = 0;
 
     // Send file start message
     if (!await this._sendFileStartMsg(fileName, fileType, fileDest, fileContents))
@@ -166,8 +167,8 @@ export default class RaftFileHandler {
       RaftLog.warn(`sendFileStartMsg error ${err}`);
       return false;
     }
-    if (fileStartResp.rslt !== 'ok') {
-      RaftLog.warn(`sendFileStartMsg error ${fileStartResp.rslt}`);
+    if (!fileStartResp || fileStartResp.rslt !== 'ok') {
+      RaftLog.warn(`sendFileStartMsg error ${fileStartResp?.rslt ?? 'no response'}`);
       return false;
     }
 
@@ -182,11 +183,16 @@ export default class RaftFileHandler {
     } else {
       this._batchAckSize = this._requestedBatchAckSize;
     }
+    const streamID = fileStartResp.streamID;
+    this._fileTxStreamID = streamID !== undefined && streamID > 0 && streamID <= 0xff ? streamID : 0;
     RaftLog.debug(
       `_fileSendStartMsg fileBlockSize req ${this._requestedFileBlockSize} resp ${fileStartResp.batchMsgSize} actual ${this._fileBlockSize}`,
     );
     RaftLog.debug(
       `_fileSendStartMsg batchAckSize req ${this._requestedBatchAckSize} resp ${fileStartResp.batchAckSize} actual ${this._batchAckSize}`,
+    );
+    RaftLog.debug(
+      `_fileSendStartMsg streamID ${this._fileTxStreamID}`,
     );
     return true;
   }
@@ -203,7 +209,8 @@ export default class RaftFileHandler {
         ? 'espfwupdate'
         : 'fileupload';
     const fileLen = fileContents.length;
-    const cmdMsg = `{"cmdName":"ufEnd","reqStr":"${reqStr}","fileType":"${fileDest}","fileName":"${fileName}","fileLen":${fileLen}}`;
+    const streamIDJson = this._fileTxStreamID !== 0 ? `,"streamID":${this._fileTxStreamID}` : '';
+    const cmdMsg = `{"cmdName":"ufEnd","reqStr":"${reqStr}","fileType":"${fileDest}","fileName":"${fileName}","fileLen":${fileLen}${streamIDJson}}`;
 
     // Await outstanding promises
     try {
@@ -224,12 +231,13 @@ export default class RaftFileHandler {
       RaftLog.warn(`sendFileEndMsg error ${err}`);
       return false;
     }
-    return fileEndResp.rslt === 'ok';
+    return fileEndResp?.rslt === 'ok';
   }
 
   async _sendFileCancelMsg(): Promise<void> {
     // File cancel command message
-    const cmdMsg = `{"cmdName":"ufCancel"}`;
+    const streamIDJson = this._fileTxStreamID !== 0 ? `,"streamID":${this._fileTxStreamID}` : '';
+    const cmdMsg = `{"cmdName":"ufCancel"${streamIDJson}}`;
 
     // Await outstanding promises
     await this.awaitOutstandingMsgPromises(true);
@@ -368,7 +376,7 @@ export default class RaftFileHandler {
     await this.awaitOutstandingMsgPromises(false);
 
     // Send
-    const promRslt = this._msgHandler.sendFileBlock(fileContents.subarray(blockStart, blockEnd), blockStart);
+    const promRslt = this._msgHandler.sendFileBlock(fileContents.subarray(blockStart, blockEnd), blockStart, this._fileTxStreamID);
     if (!promRslt) {
       return false;
     }
@@ -438,8 +446,8 @@ export default class RaftFileHandler {
       // Establish a bridge
       const bridgedDeviceSerialPort = "Serial" + fileSource.slice(bridgeSerialPrefix.length);
       const cmdResp = await this._msgHandler.createCommsBridge(bridgedDeviceSerialPort, "fileSource");
-      if (cmdResp.rslt != "ok") {
-        RaftLog.warn(`fileReceive - failed to setup bridge ${cmdResp.rslt}`);
+      if (!cmdResp || cmdResp.rslt != "ok") {
+        RaftLog.warn(`fileReceive - failed to setup bridge ${cmdResp?.rslt ?? 'no response'}`);
         return new RaftFileDownloadResult();
       }
       bridgeID = cmdResp.bridgeID;
@@ -498,7 +506,7 @@ export default class RaftFileHandler {
       return false;
     }
     RaftLog.info(`_receiveFileStartMsg rslt ${JSON.stringify(cmdResp)}`);
-    if (cmdResp.rslt === 'ok') {
+    if (cmdResp?.rslt === 'ok') {
       this._fileRxBatchMsgSize = cmdResp.batchMsgSize;
       this._fileRxBatchAckSize = cmdResp.batchAckSize;
       this._fileRxStreamID = cmdResp.streamID;
@@ -510,6 +518,10 @@ export default class RaftFileHandler {
       this._fileRxLastAckPos = 0;
       this._fileRxLastBlockTime = Date.now();
       this._fileRxActive = true;
+    }
+    if (!cmdResp) {
+      RaftLog.warn(`_receiveFileStartMsg failed no response`);
+      return false;
     }
     return cmdResp.rslt === 'ok';
   }
@@ -581,6 +593,7 @@ export default class RaftFileHandler {
               `elapsed ${now - startTime}ms overallTimeout ${overallTimeoutMs}ms ` +
               `blockGap ${now - this._fileRxLastBlockTime}ms blockTimeout ${blockTimeoutMs}ms`);
           this._fileRxActive = false;
+          this._sendFileRxCancelMsg(bridgeID);
           reject(new Error('fileReceive failed'));
           return;
         }
@@ -652,6 +665,12 @@ export default class RaftFileHandler {
     }
 
     // Check deferred CRC if start response didn't include one
+    if (!cmdResp) {
+      RaftLog.warn(`_receiveFileEnd failed no response`);
+      this._fileRxActive = false;
+      return false;
+    }
+
     if (this._fileRxCrc16 < 0 && cmdResp.crc16) {
       const expectedCrc = parseInt(cmdResp.crc16, 16);
       const actualCrc = RaftMiniHDLC.crc16(this._fileRxBuffer);
@@ -684,8 +703,20 @@ export default class RaftFileHandler {
   ): void {
     // RaftLog.info(`onFileBlock filePos ${filePos} fileBlockData ${RaftUtils.bufferToHex(fileBlockData)}`);
 
+    if (!this._fileRxActive) {
+      RaftLog.verbose(`onFileBlock ignored inactive transfer filePos ${filePos} len ${fileBlockData.length}`);
+      return;
+    }
+
+    const streamID = (filePos >>> 24) & 0xff;
+    const streamFilePos = filePos & 0x00ffffff;
+    if (streamID !== 0 && streamID !== this._fileRxStreamID) {
+      RaftLog.verbose(`onFileBlock ignored stale streamID ${streamID} active ${this._fileRxStreamID}`);
+      return;
+    }
+
     // Check if this is the next block we are expecting
-    if (filePos === this._fileRxBuffer.length) {
+    if (streamFilePos === this._fileRxBuffer.length) {
 
       // Add to buffer
       const tmpArray = new Uint8Array(this._fileRxBuffer.length + fileBlockData.length);
@@ -700,7 +731,7 @@ export default class RaftFileHandler {
       // RaftLog.info(`onFileBlock filePos ${filePos} fileBlockData ${RaftUtils.bufferToHex(fileBlockData)} added to buffer`);
 
     } else {
-      RaftLog.warn(`onFileBlock expected streamID ${this._fileRxStreamID} filePos ${filePos} fileBlockData ${RaftUtils.bufferToHex(fileBlockData)} out of sequence`);
+      RaftLog.warn(`onFileBlock expected streamID ${this._fileRxStreamID} filePos ${streamFilePos} fileBlockData ${RaftUtils.bufferToHex(fileBlockData)} out of sequence`);
     }
   }
 

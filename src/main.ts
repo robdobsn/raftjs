@@ -21,6 +21,7 @@ export { default as RaftFileHandler } from './RaftFileHandler';
 export { default as RaftLog } from './RaftLog';
 export { default as RaftMiniHDLC } from './RaftMiniHDLC';
 export { default as RaftMsgHandler } from './RaftMsgHandler'
+export { default as RaftMicroPythonConsoleClient } from './RaftMicroPythonConsoleClient';
 export { default as RaftStreamHandler } from './RaftStreamHandler';
 export { default as RaftSystemUtils } from './RaftSystemUtils';
 export { default as RaftUtils } from './RaftUtils';

@@ -269,8 +269,11 @@ export default class RaftMsgHandler {
         }
 
       } else {
-        RaftLog.warn(
-          `_handleResponseMessages RICREST response doesn't contain rslt ${rxMsgNum == 0 ? "unnumbered" : "msgNum " + rxMsgNum.toString()}resp ${restStr}`,
+        // Some REST APIs return data-only JSON, including an empty object, with no rslt field.
+        // Treat parseable JSON as a successful transport response and let callers interpret it.
+        msgRsltCode = RaftMsgResultCode.MESSAGE_RESULT_OK;
+        RaftLog.verbose(
+          `_handleResponseMessages RICREST response without rslt ${rxMsgNum == 0 ? "unnumbered" : "msgNum " + rxMsgNum.toString()} resp ${restStr}`,
         );
       }
 
@@ -726,9 +729,10 @@ export default class RaftMsgHandler {
 
   async sendFileBlock(
     blockContents: Uint8Array,
-    blockStart: number
+    blockStart: number,
+    streamID = 0,
   ): Promise<boolean> {
-    const msgBuf = this.encodeFileStreamBlock(blockContents, blockStart, 0);
+    const msgBuf = this.encodeFileStreamBlock(blockContents, blockStart, streamID);
 
     // // Debug
     // RaftLog.debug(
