@@ -27,12 +27,11 @@ jobs:
         with:
           node-version: '20.x'
           registry-url: 'https://registry.npmjs.org'
-      
+
       - run: npm install
-      - run: npm run build-all 
-      
+      - run: npm run build-all
+
       # Publish with provenance using token (temporary until npm fixes OIDC)
       - run: npm publish --provenance --access public
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }} 
-          
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

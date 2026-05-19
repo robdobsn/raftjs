@@ -349,13 +349,13 @@ describe("CustomAttrHandler with transpiled pseudocode", () => {
         expect(result[0]).toEqual([15]);
     });
 
-    test("returns empty array when buffer too short", () => {
+    test("uses available bytes when buffer is shorter than metadata length", () => {
         const meta = makeMeta(10, ["val"], "test_short", "out.val = buf[0];");
         const handler = new CustomAttrHandler();
-        const bufData = new Uint8Array([1, 2, 3]); // only 3 bytes, need 10
+        const bufData = new Uint8Array([1, 2, 3]); // only 3 bytes, metadata length is 10
 
         const result = handler.handleAttr(meta, bufData, 0);
-        expect(result).toEqual([]);
+        expect(result).toEqual([[1]]);
     });
 
     test("msgBufIdx offsets into the message buffer", () => {
