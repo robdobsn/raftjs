@@ -11,6 +11,23 @@ import CustomAttrHandler from "./RaftCustomAttrHandler";
 import { DeviceTypeAttribute, DeviceTypePollRespMetadata, decodeAttrUnitsEncoding, isAttrTypeSigned } from "./RaftDeviceInfo";
 import { DeviceAttributesState, DeviceTimeline } from "./RaftDeviceStates";
 import { structSizeOf, structUnpack } from "./RaftStruct";
+import RaftUtils from "./RaftUtils";
+
+// Optional diagnostic context for attribute decoding. When provided, the
+// handler emits a detailed warning if an attribute would read past the
+// declared sample boundary or the end of the message buffer. This is used to
+// track down firmware/schema mismatches.
+export interface AttrDecodeDiagContext {
+    deviceKey?: string;
+    deviceType?: string;
+    debugMsgIndex?: number;
+    // Inclusive start (in msgBuffer) of the current sample's bytes (after the
+    // 1-byte sampleLen prefix). When provided together with sampleEndIdx, the
+    // handler will bound-check attribute reads against this range.
+    sampleStartIdx?: number;
+    // Exclusive end (in msgBuffer) of the current sample's bytes.
+    sampleEndIdx?: number;
+}
 
 export default class AttributeHandler {
 
@@ -21,14 +38,25 @@ export default class AttributeHandler {
     private POLL_RESULT_TIMESTAMP_SIZE = 2;
     private POLL_RESULT_WRAP_VALUE = this.POLL_RESULT_TIMESTAMP_SIZE === 2 ? 65536 : 4294967296;
     private POLL_RESULT_RESOLUTION_US = 100;
-    
-    public processMsgAttrGroup(msgBuffer: Uint8Array, msgBufIdx: number, deviceTimeline: DeviceTimeline, pollRespMetadata: DeviceTypePollRespMetadata, 
-                        devAttrsState: DeviceAttributesState, maxDataPoints: number): number {
-        
+
+    public processMsgAttrGroup(msgBuffer: Uint8Array, msgBufIdx: number, deviceTimeline: DeviceTimeline, pollRespMetadata: DeviceTypePollRespMetadata,
+                        devAttrsState: DeviceAttributesState, maxDataPoints: number,
+                        msgEndIdxOrDiagCtx: number | AttrDecodeDiagContext = msgBuffer.length,
+                        diagCtx?: AttrDecodeDiagContext): number {
+
+        // Merge rationale: Robotical's devbin compatibility parser needs an
+        // explicit sample boundary; upstream's diagnostics need per-sample
+        // context. Accept both call styles so malformed samples are skipped
+        // without losing useful overrun warnings.
+        const msgEndIdx = typeof msgEndIdxOrDiagCtx === "number"
+            ? msgEndIdxOrDiagCtx
+            : msgEndIdxOrDiagCtx.sampleEndIdx ?? msgBuffer.length;
+        const effectiveDiagCtx = typeof msgEndIdxOrDiagCtx === "number" ? diagCtx : msgEndIdxOrDiagCtx;
         // console.log(`processMsgAttrGroup msg ${msgHexStr} timestamp ${timestamp} origTimestamp ${origTimestamp} msgBufIdx ${msgBufIdx}`)
+        const boundedMsgEndIdx = Math.min(Math.max(msgEndIdx, msgBufIdx), msgBuffer.length);
 
         // Extract msg timestamp
-        const { newBufIdx, timestampUs } = this.extractTimestampAndAdvanceIdx(msgBuffer, msgBufIdx, deviceTimeline);
+        const { newBufIdx, timestampUs } = this.extractTimestampAndAdvanceIdx(msgBuffer, msgBufIdx, deviceTimeline, boundedMsgEndIdx);
         if (newBufIdx < 0)
             return -1;
         msgBufIdx = newBufIdx;
@@ -38,10 +66,15 @@ export default class AttributeHandler {
 
         // New attribute values (in order as they appear in the attributes JSON)
         let newAttrValues: (number | string)[][] = [];
+        // Tracks whether any individual attribute decode failed in the non-custom path.
+        // When true, the detailed per-attribute overrun warning has already been emitted
+        // by processMsgAttribute, so we suppress the redundant downstream length/empty
+        // warnings that would otherwise fire every poll.
+        let attrDecodeFailed = false;
         if ("c" in pollRespMetadata) {
 
             // Extract attribute values using custom handler
-            newAttrValues = this._customAttrHandler.handleAttr(pollRespMetadata, msgBuffer, msgBufIdx);
+            newAttrValues = this._customAttrHandler.handleAttr(pollRespMetadata, msgBuffer, msgBufIdx, boundedMsgEndIdx);
 
             // Apply per-attribute transforms that the custom handler doesn't handle
             for (let attrIdx = 0; attrIdx < pollRespMetadata.a.length && attrIdx < newAttrValues.length; attrIdx++) {
@@ -82,22 +115,23 @@ export default class AttributeHandler {
                 if (!("t" in attrDef)) {
                     console.warn(`DeviceManager msg unknown msgBuffer ${msgBuffer} tsUs ${timestampUs} attrDef ${JSON.stringify(attrDef)}`);
                     newAttrValues.push([]);
+                    attrDecodeFailed = true;
                     continue;
                 }
 
                 // console.log(`RaftAttrHdlr.processMsgAttrGroup attr ${attrDef.n} msgBufIdx ${msgBufIdx} timestampUs ${timestampUs} attrDef ${JSON.stringify(attrDef)}`);
 
                 // Process the attribute
-                const { values, newMsgBufIdx } = this.processMsgAttribute(attrDef, msgBuffer, msgBufIdx, msgDataStartIdx);
+                const { values, newMsgBufIdx } = this.processMsgAttribute(attrDef, msgBuffer, msgBufIdx, msgDataStartIdx,
+                    boundedMsgEndIdx, pollRespMetadata, effectiveDiagCtx);
                 if (newMsgBufIdx < 0) {
-                    newAttrValues.push([]);
-                    continue;
+                    return -1;
                 }
                 msgBufIdx = newMsgBufIdx;
                 newAttrValues.push(values);
             }
         }
-        
+
         // Number of bytes in group
         let pollRespSizeBytes = msgBufIdx - msgDataStartIdx;
         if (pollRespSizeBytes < pollRespMetadata.b) {
@@ -107,21 +141,25 @@ export default class AttributeHandler {
         // Check if any attributes were added (in addition to timestamp)
         if (newAttrValues.length === 0) {
             console.warn(`DeviceManager msg attrGroup ${JSON.stringify(pollRespMetadata)} newAttrValues ${newAttrValues} is empty`);
-            return msgDataStartIdx+pollRespSizeBytes;
+            return -1;
         }
 
         // All attributes must have the same number of new values
         const numNewDataPoints = newAttrValues[0].length;
         for (let i = 1; i < newAttrValues.length; i++) {
             if (newAttrValues[i].length !== numNewDataPoints) {
-                console.warn(`DeviceManager msg attrGroup ${pollRespMetadata} attrName ${pollRespMetadata.a[i].n} newAttrValues ${newAttrValues} do not have the same length`);
+                if (!attrDecodeFailed) {
+                    console.warn(`DeviceManager msg attrGroup ${JSON.stringify(pollRespMetadata)} attrName ${pollRespMetadata.a[i].n} newAttrValues lengths ${newAttrValues.map(v => v.length).join(",")} do not match`);
+                }
                 return msgDataStartIdx+pollRespSizeBytes;
             }
         }
 
         // All attributes in the schema should have values
         if (newAttrValues.length !== pollRespMetadata.a.length) {
-            console.warn(`DeviceManager msg attrGroup ${pollRespMetadata} newAttrValues ${newAttrValues} length does not match attrGroup.a length`);
+            if (!attrDecodeFailed) {
+                console.warn(`DeviceManager msg attrGroup ${JSON.stringify(pollRespMetadata)} newAttrValues length ${newAttrValues.length} does not match attrGroup.a length ${pollRespMetadata.a.length}`);
+            }
             return msgDataStartIdx+pollRespSizeBytes;
         }
 
@@ -175,6 +213,11 @@ export default class AttributeHandler {
                 const alpha = deviceTimeline.emaCalibrationPolls < 20 ? 0.3 : 0.05;
                 deviceTimeline.emaIntervalUs = alpha * instantIntervalUs
                                               + (1.0 - alpha) * deviceTimeline.emaIntervalUs;
+            } else if (numNewDataPoints === 1) {
+                const instantIntervalUs = timestampUs - deviceTimeline.emaPrevPollTimeUs;
+                if (Number.isFinite(instantIntervalUs) && instantIntervalUs > 0) {
+                    deviceTimeline.emaIntervalUs = instantIntervalUs;
+                }
             }
             deviceTimeline.emaPrevPollTimeUs = timestampUs;
             deviceTimeline.emaCalibrationPolls++;
@@ -182,11 +225,13 @@ export default class AttributeHandler {
 
         // Assign timestamps: each sample steps forward by emaIntervalUs
         const timestampsUs = Array(numNewDataPoints).fill(0);
-        const lastTimeUs = deviceTimeline.timestampsUs.length > 0 
-            ? deviceTimeline.timestampsUs[deviceTimeline.timestampsUs.length - 1] 
+        const lastTimeUs = deviceTimeline.timestampsUs.length > 0
+            ? deviceTimeline.timestampsUs[deviceTimeline.timestampsUs.length - 1]
             : -Infinity;
         for (let i = 0; i < numNewDataPoints; i++) {
-            timestampsUs[i] = deviceTimeline.emaLastSampleTimeUs + (i + 1) * deviceTimeline.emaIntervalUs;
+            timestampsUs[i] = numNewDataPoints === 1
+                ? timestampUs
+                : deviceTimeline.emaLastSampleTimeUs + (i + 1) * deviceTimeline.emaIntervalUs;
             // Ensure monotonically increasing timestamps
             if (i === 0 && timestampsUs[0] <= lastTimeUs) {
                 timestampsUs[0] = lastTimeUs + 1;
@@ -196,7 +241,7 @@ export default class AttributeHandler {
         }
         // Advance the piecewise model cursor past all samples in this batch
         if (deviceTimeline.emaCalibrated && numNewDataPoints > 0) {
-            deviceTimeline.emaLastSampleTimeUs += numNewDataPoints * deviceTimeline.emaIntervalUs;
+            deviceTimeline.emaLastSampleTimeUs = timestampsUs[timestampsUs.length - 1];
         }
 
         // Check if timeline points need to be discarded
@@ -220,7 +265,7 @@ export default class AttributeHandler {
         // Iterate through all attributes to find those with a vft field
         for (let attrIdx = 0; attrIdx < pollRespMetadata.a.length; attrIdx++) {
             const attrDef: DeviceTypeAttribute = pollRespMetadata.a[attrIdx];
-            
+
             // Check if this attribute has a vft field
             if (!("vft" in attrDef) || !attrDef.vft) {
                 continue;
@@ -247,7 +292,7 @@ export default class AttributeHandler {
             // Get the most recent values from both attributes
             const numValues = currentAttr.values.length;
             const startIdx = numValues - numNewDataPoints;
-            
+
             // Process each of the new values
             for (let i = 0; i < numNewDataPoints; i++) {
                 const valueIdx = startIdx + i;
@@ -265,34 +310,43 @@ export default class AttributeHandler {
         }
     }
 
-    private processMsgAttribute(attrDef: DeviceTypeAttribute, msgBuffer: Uint8Array, msgBufIdx: number, msgDataStartIdx: number): { values: (number | string)[], newMsgBufIdx: number} {
+    private processMsgAttribute(attrDef: DeviceTypeAttribute, msgBuffer: Uint8Array, msgBufIdx: number, msgDataStartIdx: number,
+                                msgEndIdx: number, pollRespMetadata?: DeviceTypePollRespMetadata,
+                                diagCtx?: AttrDecodeDiagContext): { values: (number | string)[], newMsgBufIdx: number} {
 
         // Current field message string index
         let curFieldBufIdx = msgBufIdx;
         let attrUsesAbsPos = false;
+        const boundedMsgEndIdx = Math.min(Math.max(msgEndIdx, msgDataStartIdx), msgBuffer.length);
+        const attrTypesOnly = attrDef.t;
+        const numBytesConsumed = structSizeOf(attrTypesOnly);
 
         // Check for "at" field which means absolute position in the buffer
         if (attrDef.at !== undefined) {
             // Handle both single value and array of byte positions
             if (Array.isArray(attrDef.at)) {
                 // Create a new buffer for non-contiguous data extraction
-                const elemSize = structSizeOf(attrDef.t);
+                const elemSize = numBytesConsumed;
                 const bytesForType = new Uint8Array(elemSize);
-                
+
                 // Zero out the buffer
                 bytesForType.fill(0);
-                
+
                 // Copy bytes from the specified positions
                 for (let i = 0; i < attrDef.at.length && i < elemSize; i++) {
                     const sourceIdx = msgDataStartIdx + attrDef.at[i];
-                    if (sourceIdx < msgBuffer.length) {
-                        bytesForType[i] = msgBuffer[sourceIdx];
+                    if (sourceIdx < msgDataStartIdx || sourceIdx >= boundedMsgEndIdx) {
+                        this.warnAttrOverrun(attrDef, msgBuffer, sourceIdx, elemSize, msgDataStartIdx,
+                            true, pollRespMetadata, diagCtx, sourceIdx >= msgBuffer.length ? "msgBuffer" : "sample");
+                        return { values: [], newMsgBufIdx: -1 };
                     }
+                    bytesForType[i] = msgBuffer[sourceIdx];
                 }
-                
+
                 // Use this buffer for attribute extraction
                 msgBuffer = bytesForType;
                 curFieldBufIdx = 0;
+                msgEndIdx = bytesForType.length;
             } else {
                 // Standard absolute position in the buffer
                 curFieldBufIdx = msgDataStartIdx + attrDef.at;
@@ -300,27 +354,27 @@ export default class AttributeHandler {
             attrUsesAbsPos = true;
         }
 
-        // Check if outside bounds of message
-        if (curFieldBufIdx >= msgBuffer.length) {
-            // console.warn(`DeviceManager msg outside bounds msgBuffer ${msgBuffer} attrName ${attrDef.n}`);
+        // Merge rationale: keep Robotical's hard sample bounds as the source of
+        // truth, but emit upstream's one-shot diagnostic when a schema tries to
+        // read beyond the sample or buffer.
+        const attrEndIdx = curFieldBufIdx + numBytesConsumed;
+        const effectiveMsgEndIdx = Math.min(Math.max(msgEndIdx, curFieldBufIdx), msgBuffer.length);
+        if (curFieldBufIdx >= effectiveMsgEndIdx || attrEndIdx > effectiveMsgEndIdx) {
+            this.warnAttrOverrun(attrDef, msgBuffer, curFieldBufIdx, numBytesConsumed, msgDataStartIdx,
+                                 attrUsesAbsPos, pollRespMetadata, diagCtx,
+                                 attrEndIdx > msgBuffer.length ? "msgBuffer" : "sample");
             return { values: [], newMsgBufIdx: -1 };
         }
 
-        // Attribute type
-        const attrTypesOnly = attrDef.t;
-
         // Slice into buffer
-        const attrBuf = msgBuffer.slice(curFieldBufIdx);
- 
+        const attrBuf = msgBuffer.slice(curFieldBufIdx, effectiveMsgEndIdx);
+
         // Check if a mask is used and the value is signed
         const maskOnSignedValue = "m" in attrDef && isAttrTypeSigned(attrTypesOnly);
 
         // Extract the value using python-struct
         const unpackValues = structUnpack(maskOnSignedValue ? attrTypesOnly.toUpperCase() : attrTypesOnly, attrBuf);
         let attrValues = unpackValues as (number | string)[];
-
-        // Get number of bytes consumed
-        const numBytesConsumed = structSizeOf(attrTypesOnly);
 
         // Check if any values are strings (from 's' format) — skip numeric transforms for those
         const hasStringValues = attrValues.some(v => typeof v === 'string');
@@ -341,7 +395,7 @@ export default class AttributeHandler {
             const mask = typeof attrDef.x === "string" ? parseInt(attrDef.x, 16) : attrDef.x as number;
             attrValues = attrValues.map((value) => ((value as number) >>> 0) ^ mask);
         }
-        
+
         // Check for AND mask
         if (!hasStringValues && "m" in attrDef) {
             const mask = typeof attrDef.m === "string" ? parseInt(attrDef.m, 16) : attrDef.m as number;
@@ -392,25 +446,25 @@ export default class AttributeHandler {
 
                 // Search through the lookup table rows for a match
                 let defaultValue: number | null = null;
-                
+
                 for (const row of attrDef.lut || []) {
                     // Empty string means default for unmatched values
                     if (row.r === "") {
                         defaultValue = row.v;
                         continue;
                     }
-                    
+
                     // Parse the range string
                     if (this.isValueInRangeString(value as number, row.r)) {
                         return row.v;
                     }
                 }
-                
+
                 // If no match found but we have a default, use it
                 if (defaultValue !== null) {
                     return defaultValue;
                 }
-                
+
                 // Otherwise keep the original value
                 return value as number;
             });
@@ -430,31 +484,66 @@ export default class AttributeHandler {
         // Return the value
         return { values: attrValues, newMsgBufIdx: msgBufIdx };
     }
-    
+
+    // One-shot detailed warning when an attribute decode would overrun the
+    // sample/message bounds. Includes the exact bytes and schema so the
+    // firmware vs. registered device-type schema can be reconciled.
+    private _overrunWarnSeen: Set<string> = new Set();
+    private warnAttrOverrun(attrDef: DeviceTypeAttribute, msgBuffer: Uint8Array, curFieldBufIdx: number,
+                            attrTypeSize: number, msgDataStartIdx: number, attrUsesAbsPos: boolean,
+                            pollRespMetadata: DeviceTypePollRespMetadata | undefined,
+                            diagCtx: AttrDecodeDiagContext | undefined, overrunOf: "msgBuffer" | "sample"): void {
+        const sampleStart = diagCtx?.sampleStartIdx ?? msgDataStartIdx;
+        const sampleEnd = diagCtx?.sampleEndIdx;
+        const dedupeKey = `${diagCtx?.deviceKey ?? "?"}|${diagCtx?.deviceType ?? "?"}|${attrDef.n}|${attrDef.t}|${attrUsesAbsPos ? attrDef.at : "rel"}`;
+        if (this._overrunWarnSeen.has(dedupeKey)) {
+            return;
+        }
+        this._overrunWarnSeen.add(dedupeKey);
+        const sampleHex = sampleEnd !== undefined
+            ? RaftUtils.bufferToHex(msgBuffer.slice(sampleStart, sampleEnd))
+            : "<unknown sample bounds>";
+        const availableInSample = sampleEnd !== undefined ? Math.max(0, sampleEnd - curFieldBufIdx) : -1;
+        const availableInBuffer = Math.max(0, msgBuffer.length - curFieldBufIdx);
+        console.warn(
+            `AttributeHandler decode overrun (${overrunOf}): ` +
+            `deviceKey=${diagCtx?.deviceKey ?? "?"} deviceType=${diagCtx?.deviceType ?? "?"} ` +
+            `debugMsgIndex=${diagCtx?.debugMsgIndex ?? "?"} attr.n=${attrDef.n} attr.t=${attrDef.t} ` +
+            `attrTypeSize=${attrTypeSize} attrUsesAbsPos=${attrUsesAbsPos} attr.at=${JSON.stringify(attrDef.at)} ` +
+            `curFieldBufIdx=${curFieldBufIdx} msgBuffer.length=${msgBuffer.length} ` +
+            `sampleStartIdx=${sampleStart} sampleEndIdx=${sampleEnd ?? "?"} ` +
+            `availableInSample=${availableInSample} availableInBuffer=${availableInBuffer} ` +
+            `sampleHex=${sampleHex} ` +
+            `pollRespMetadata.b=${pollRespMetadata?.b} ` +
+            `schema=${JSON.stringify(pollRespMetadata?.a)}`
+        );
+    }
+
     private signExtend(value: number, mask: number): number {
         const signBitMask = (mask + 1) >> 1;
         const signBit = value & signBitMask;
-    
+
         if (signBit !== 0) {  // If sign bit is set
             const highBitsMask = ~mask & ~((mask + 1) >> 1);
             value |= highBitsMask;  // Apply the sign extension
         }
-    
+
         return value;
     }
 
-    private extractTimestampAndAdvanceIdx(msgBuffer: Uint8Array, msgBufIdx: number, timestampWrapHandler: DeviceTimeline): 
+    private extractTimestampAndAdvanceIdx(msgBuffer: Uint8Array, msgBufIdx: number, timestampWrapHandler: DeviceTimeline, msgEndIdx = msgBuffer.length):
                     { newBufIdx: number, timestampUs: number } {
+        const boundedMsgEndIdx = Math.min(Math.max(msgEndIdx, msgBufIdx), msgBuffer.length);
 
         // Check there are enough bytes for the timestamp
-        if (msgBufIdx + this.POLL_RESULT_TIMESTAMP_SIZE > msgBuffer.length) {
+        if (msgBufIdx + this.POLL_RESULT_TIMESTAMP_SIZE > boundedMsgEndIdx) {
             return { newBufIdx: -1, timestampUs: 0 };
         }
 
         // Use struct to extract the timestamp
         const tsBuffer = msgBuffer.slice(msgBufIdx, msgBufIdx + this.POLL_RESULT_TIMESTAMP_SIZE);
         let timestampUs: number;
-        if (this.POLL_RESULT_TIMESTAMP_SIZE === 2) { 
+        if (this.POLL_RESULT_TIMESTAMP_SIZE === 2) {
             timestampUs = structUnpack(">H", tsBuffer)[0] as number * this.POLL_RESULT_RESOLUTION_US;
         } else {
             timestampUs = structUnpack(">I", tsBuffer)[0] as number * this.POLL_RESULT_RESOLUTION_US;
@@ -480,37 +569,37 @@ export default class AttributeHandler {
     private isValueInRangeString(value: number, rangeStr: string): boolean {
         // Round to integer for comparison
         const roundedValue = Math.round(value);
-        
+
         // Split the range string by commas
         const parts = rangeStr.split(',');
-        
+
         for (const part of parts) {
             // Check if it's a range (contains a hyphen)
             if (part.includes('-')) {
                 const [startStr, endStr] = part.split('-');
-                
+
                 // Handle hex values
-                const start = startStr.toLowerCase().startsWith('0x') ? 
+                const start = startStr.toLowerCase().startsWith('0x') ?
                     parseInt(startStr, 16) : parseInt(startStr, 10);
-                const end = endStr.toLowerCase().startsWith('0x') ? 
+                const end = endStr.toLowerCase().startsWith('0x') ?
                     parseInt(endStr, 16) : parseInt(endStr, 10);
-                
+
                 if (!isNaN(start) && !isNaN(end) && roundedValue >= start && roundedValue <= end) {
                     return true;
                 }
-            } 
+            }
             // Check if it's a single value
             else {
                 // Handle hex values
-                const partValue = part.toLowerCase().startsWith('0x') ? 
+                const partValue = part.toLowerCase().startsWith('0x') ?
                     parseInt(part, 16) : parseInt(part, 10);
-                
+
                 if (!isNaN(partValue) && roundedValue === partValue) {
                     return true;
                 }
             }
         }
-        
+
         return false;
     }
 

@@ -23,6 +23,8 @@ interface SimulatedDeviceInfo {
 
 export default class RaftChannelSimulated implements RaftChannel {
 
+  private readonly POLL_RESULT_TIMESTAMP_RESOLUTION_US = 100;
+
   // Message handler
   private _raftMsgHandler: RaftMsgHandler | null = null;
 
@@ -292,8 +294,10 @@ export default class RaftChannelSimulated implements RaftChannel {
     const dataView = new DataView(dataBuffer);
     let bytePos = 0;
 
-    // Add 16 bit big endian deviceTimeMs mod 65536 to the buffer
-    dataView.setUint16(bytePos, deviceTimeMs % 65536, false);
+    // Add 16-bit big-endian timestamp ticks. Poll timestamps are decoded in
+    // 100us units by RaftAttributeHandler.
+    const timestampTicks = Math.floor((deviceTimeMs * 1000) / this.POLL_RESULT_TIMESTAMP_RESOLUTION_US) % 65536;
+    dataView.setUint16(bytePos, timestampTicks, false);
     bytePos += 2;
 
     const handledByCustomGenerator = this._fillCustomRawData(

@@ -152,6 +152,7 @@ export type RaftFileStartResp = {
   rslt: string;
   batchMsgSize: number;
   batchAckSize: number;
+  streamID?: number;
 };
 
 export type RaftStreamStartResp = {
@@ -207,6 +208,28 @@ export class RaftSysModInfoBLEMan {
 export type RaftProgressCBType = (received: number, total: number) => void;
 
 export type RaftStreamDataProgressCBType = (sent: number, total: number, progress: number) => void;
+
+export type RaftRtStreamDataCBType = (data: Uint8Array, filePos: number, streamID: number) => void;
+
+export type RaftRtStreamOptions = {
+  fileName: string;
+  endpoint: string;
+  onData: RaftRtStreamDataCBType;
+  sendInitialEmptyBlock?: boolean;
+};
+
+export type RaftRtStreamHandle = {
+  streamID: number;
+  maxBlockSize: number;
+  sendBytes: (bytes: Uint8Array) => Promise<boolean>;
+  sendText: (text: string) => Promise<boolean>;
+  close: () => Promise<boolean>;
+};
+
+export type RaftRtStreamStartResp = RaftOKFail & {
+  streamID?: number;
+  maxBlockSize?: number;
+};
 
 export class RaftFileDownloadResult {
   fileData: Uint8Array | null = null;

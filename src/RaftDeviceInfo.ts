@@ -136,6 +136,7 @@ export interface DeviceTypeInfo {
     desc: string;
     manu: string;
     type: string;
+    role?: string;
     resp?: DeviceTypePollRespMetadata;
     clas?: Array<string>;
     actions?: DeviceTypeAction[];
@@ -148,5 +149,8 @@ export interface DeviceTypeInfoRecs {
 export type RaftDevTypeInfoResponse = {
     req: string;
     rslt: string;
-    devinfo: DeviceTypeInfo;
+    devinfo?: DeviceTypeInfo;
+    dtIdx?: number;
+    name?: string;
+    role?: string;
   };

@@ -173,6 +173,9 @@ const DevicePanel = ({ deviceKey, lastUpdated }: DevicePanelProps) => {
     if (bracketsAdded) {
         headerText += `)`;
     }
+    if (deviceState?.deviceTypeInfo?.role?.toLowerCase() === "system") {
+        headerText += " System";
+    }
     if (deviceState?.onlineState !== DeviceOnlineState.Online) {
         headerText += " (Offline)";
     }

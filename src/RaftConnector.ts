@@ -14,7 +14,7 @@ import RaftChannelWebSocket from "./RaftChannelWebSocket";
 import RaftChannelWebSerial from "./RaftChannelWebSerial";
 import RaftChannelSimulated from "./RaftChannelSimulated";
 import RaftCommsStats from "./RaftCommsStats";
-import { RaftEventFn, RaftOKFail, RaftFileSendType, RaftFileDownloadResult, RaftProgressCBType, RaftStreamDataProgressCBType, RaftBridgeSetupResp, RaftFileDownloadFn, RaftReportMsg } from "./RaftTypes";
+import { RaftEventFn, RaftOKFail, RaftFileSendType, RaftFileDownloadResult, RaftProgressCBType, RaftStreamDataProgressCBType, RaftBridgeSetupResp, RaftFileDownloadFn, RaftReportMsg, RaftRtStreamDataCBType, RaftRtStreamHandle, RaftRtStreamOptions, RaftRtStreamStartResp } from "./RaftTypes";
 import RaftSystemUtils from "./RaftSystemUtils";
 import RaftFileHandler from "./RaftFileHandler";
 import RaftStreamHandler from "./RaftStreamHandler";
@@ -104,6 +104,10 @@ export default class RaftConnector {
 
   // Update manager
   private _raftUpdateManager: RaftUpdateManager | null = null;
+
+  // Open-ended RT stream callbacks keyed by streamID
+  private _rtStreamCallbacks = new Map<number, RaftRtStreamDataCBType>();
+  private _fallbackRtStreamCallback: { streamID: number, callback: RaftRtStreamDataCBType } | null = null;
 
   /**
    * RaftConnector constructor
@@ -212,6 +216,22 @@ export default class RaftConnector {
   }
 
   /**
+   * getOperationQueueDepth
+   * @returns number of high-level device operations queued or running
+   */
+  getOperationQueueDepth(): number {
+    return 0;
+  }
+
+  /**
+   * isOperationBusy
+   * @returns true when a high-level device operation is queued or running
+   */
+  isOperationBusy(): boolean {
+    return false;
+  }
+
+  /**
    * Get Raft message handler (to allow message sending and receiving)
    * @returns RaftMsgHandler - Raft message handler
    * */
@@ -258,7 +278,7 @@ export default class RaftConnector {
       this._raftChannel = new RaftChannelWebSerial();
       this._channelConnMethod = 'WebSerial';
     } else if (method === 'Simulated') {
-      this._raftChannel = new RaftChannelSimulated(); 
+      this._raftChannel = new RaftChannelSimulated();
       this._channelConnMethod = 'Simulated';
     } else {
       RaftLog.warn('Unknown method: ' + method);
@@ -295,6 +315,7 @@ export default class RaftConnector {
       RaftLog.warn('Raft channel is not initialized.');
       return false;
     }
+
 
     // Store locator
     this._channelConnLocator = locator;
@@ -409,6 +430,23 @@ export default class RaftConnector {
     }
   }
 
+  disconnectForPageUnload(): void {
+    this._retryIfLostIsConnected = false;
+
+    if (!this._raftChannel) {
+      return;
+    }
+
+    const channelToDisconnect = this._raftChannel;
+    this._raftChannel = null;
+
+    try {
+      void channelToDisconnect.disconnect();
+    } catch (error) {
+      RaftLog.warn(`RaftConnector.disconnectForPageUnload failed ${error}`);
+    }
+  }
+
   // Mark: Tx Message handling -----------------------------------------------------------------------------------------
 
   /**
@@ -421,17 +459,23 @@ export default class RaftConnector {
    */
   async sendRICRESTMsg(commandName: string, params: object,
     bridgeID: number | undefined = undefined): Promise<RaftOKFail> {
+    return this._sendRICRESTMsg(commandName, params, bridgeID);
+  }
+
+  private async _sendRICRESTMsg(commandName: string, params: object,
+    bridgeID: number | undefined = undefined): Promise<RaftOKFail> {
     try {
       // Format the paramList as query string
       const paramEntries = Object.entries(params);
       let paramQueryStr = '';
       for (const param of paramEntries) {
         if (paramQueryStr.length > 0) paramQueryStr += '&';
-        paramQueryStr += param[0] + '=' + param[1];
+        paramQueryStr += `${encodeURIComponent(param[0])}=${encodeURIComponent(String(param[1]))}`;
       }
       // Format the url to send
       if (paramQueryStr.length > 0) commandName += '?' + paramQueryStr;
-      return await this._raftMsgHandler.sendRICRESTURL<RaftOKFail>(commandName, bridgeID);
+      const response = await this._raftMsgHandler.sendRICRESTURL<RaftOKFail | null>(commandName, bridgeID);
+      return response ?? { rslt: 'fail' };
     } catch (error) {
       RaftLog.warn(`sendRICRESTMsg failed ${error}`);
       return { rslt: 'fail' };
@@ -485,6 +529,13 @@ export default class RaftConnector {
     fileBlockData: Uint8Array
   ): void {
     // RaftLog.info(`onRxFileBlock filePos ${filePos} fileBlockData ${RaftUtils.bufferToHex(fileBlockData)}`);
+    const streamID = (filePos >>> 24) & 0xff;
+    const streamFilePos = filePos & 0x00ffffff;
+    const streamCallback = this._rtStreamCallbacks.get(streamID);
+    if (streamID !== 0 && streamCallback) {
+      streamCallback(fileBlockData, streamFilePos, streamID);
+      return;
+    }
     this._raftFileHandler.onFileBlock(filePos, fileBlockData);
   }
 
@@ -544,6 +595,82 @@ export default class RaftConnector {
       );
     }
     return false;
+  }
+
+  /**
+   * openRtStream - open an indefinite bidirectional RT stream.
+   * The returned handle can send byte blocks and closes with ufEnd.
+   */
+  async openRtStream(options: RaftRtStreamOptions): Promise<RaftRtStreamHandle> {
+    const cmdMsg = JSON.stringify({
+      cmdName: "ufStart",
+      reqStr: "ufStart",
+      fileType: "rtstream",
+      fileName: options.fileName,
+      endpoint: options.endpoint,
+      fileLen: 0,
+    });
+
+    const startResp = await this._raftMsgHandler.sendRICRESTCmdFrame<RaftRtStreamStartResp>(cmdMsg);
+    if (!startResp || startResp.rslt !== "ok" || startResp.streamID === undefined) {
+      throw new Error(`openRtStream failed ${startResp?.rslt ?? "no response"}`);
+    }
+
+    const streamID = startResp.streamID;
+    const maxBlockSize = startResp.maxBlockSize || this._raftStreamHandler.maxBlockSize;
+    let txFilePos = 0;
+    let sendQueue = Promise.resolve();
+    this._rtStreamCallbacks.set(streamID, options.onData);
+    this._fallbackRtStreamCallback = { streamID, callback: options.onData };
+
+    const sendBytes = async (bytes: Uint8Array): Promise<boolean> => {
+      let sentOk = false;
+      sendQueue = sendQueue
+        .catch(() => {
+          // Keep later terminal input flowing even if an earlier block failed.
+        })
+        .then(async () => {
+          sentOk = await this._raftMsgHandler.sendStreamBlock(bytes, txFilePos, streamID);
+          if (sentOk) {
+            txFilePos = (txFilePos + bytes.length) & 0x00ffffff;
+          }
+        });
+      await sendQueue;
+      return sentOk;
+    };
+
+    const close = async (): Promise<boolean> => {
+      this._rtStreamCallbacks.delete(streamID);
+      if (this._fallbackRtStreamCallback?.streamID === streamID) {
+        this._fallbackRtStreamCallback = null;
+      }
+      const endMsg = JSON.stringify({
+        cmdName: "ufEnd",
+        reqStr: "ufEnd",
+        streamID,
+      });
+      try {
+        const endResp = await this._raftMsgHandler.sendRICRESTCmdFrame<RaftOKFail>(endMsg);
+        return endResp?.rslt === "ok";
+      } catch (error) {
+        RaftLog.warn(`closeRtStream failed ${streamID}: ${error}`);
+        return false;
+      }
+    };
+
+    // Some endpoints use an initial empty block as an attach signal.
+    // Keep this opt-in because older endpoints reject zero-length ufBlock frames.
+    if (options.sendInitialEmptyBlock) {
+      await sendBytes(new Uint8Array());
+    }
+
+    return {
+      streamID,
+      maxBlockSize,
+      sendBytes,
+      sendText: (text: string) => sendBytes(new TextEncoder().encode(text)),
+      close,
+    };
   }
 
   /**
@@ -624,7 +751,7 @@ export default class RaftConnector {
    */
   async checkConnPerformance(): Promise<number | undefined> {
 
-    // Sends a magic sequence of bytes followed by blocks of random data 
+    // Sends a magic sequence of bytes followed by blocks of random data
     // these will be ignored by the Raft library (as it recognises magic sequence)
     // and is used performance evaluation
     let prbsState = 1;
@@ -712,7 +839,7 @@ export default class RaftConnector {
       setTimeout(async () => {
 
         // Try to connect
-        const isConn = await this._connectToChannel();
+        const isConn = await this.connect(this._channelConnLocator);
         if (!isConn) {
           this._retryConnection();
         } else {
@@ -771,8 +898,8 @@ export default class RaftConnector {
 
   /**
    * onUpdateEvent - handle update event
-   * @param eventEnum 
-   * @param data 
+   * @param eventEnum
+   * @param data
    */
   _onUpdateEvent(eventEnum: RaftUpdateEvent, data: object | string | null | undefined = undefined): void {
     // Notify

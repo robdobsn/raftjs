@@ -148,10 +148,11 @@ const DeviceLineChart: React.FC<DeviceLineChartProps> = memo(({ deviceKey, lastU
                     min: axis.range[0],
                     max: axis.range[1],
                     callback: (value: number) => {
-                        if (typeof value === 'number' && Math.abs(value) > 0 && Math.abs(value) < 1) {
-                            return value.toPrecision(2);
-                        }
-                        return value;
+                        if (typeof value !== 'number') return value;
+                        if (value === 0) return '0';
+                        const abs = Math.abs(value);
+                        if (abs < 1) return Number(value.toPrecision(2)).toString();
+                        return Number(value.toPrecision(6)).toString();
                     },
                 },
             };
