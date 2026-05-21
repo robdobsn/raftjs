@@ -367,7 +367,7 @@ export default class RaftSystemUtils {
    * Get Wifi connection status
    *
    *  @return boolean - true if connected
-   *
+   *  @deprecated -- Implemented directly in the Web App
    */
   async getWiFiConnStatus(): Promise<boolean | null> {
     try {
@@ -412,6 +412,7 @@ export default class RaftSystemUtils {
    *
    *  @param boolean - true to pause, false to resume
    *  @return boolean - true if successful
+   *  @deprecated -- Implemented directly in the Web App
    *
    */
   async pauseWifiConnection(pause: boolean): Promise<boolean> {
@@ -434,6 +435,7 @@ export default class RaftSystemUtils {
    *  @param string - WiFi SSID
    *  @param string - WiFi password
    *  @return boolean - true if successful
+   *  @deprecated -- Implemented directly in the Web App
    *
    */
   async wifiConnect(ssid: string, password: string): Promise<boolean> {
@@ -483,7 +485,7 @@ export default class RaftSystemUtils {
    * Disconnect WiFi
    *
    *  @return boolean - true if successful
-   *
+   *  @deprecated -- Implemented directly in the Web App
    */
   async wifiDisconnect(): Promise<boolean> {
     try {
@@ -504,7 +506,7 @@ export default class RaftSystemUtils {
    *  WiFiScan start
    *
    *  @return boolean - true if successful
-   *
+   *  @deprecated -- Implemented directly in the Web App
    */
   async wifiScanStart(): Promise<boolean> {
     try {
@@ -520,7 +522,7 @@ export default class RaftSystemUtils {
    *  WiFiScan get results
    *
    *  @return boolean - false if unsuccessful, otherwise the results of the promise
-   *
+   *  @deprecated -- Implemented directly in the Web App
    */
   async wifiScanResults(): Promise<boolean | RaftOKFail | RaftWifiScanResults> {
     try {
