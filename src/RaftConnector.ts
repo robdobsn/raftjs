@@ -25,6 +25,24 @@ import { RaftUpdateEvent, RaftUpdateEventNames } from "./RaftUpdateEvents";
 import RaftUpdateManager from "./RaftUpdateManager";
 import { createBLEChannel } from "./RaftChannelBLEFactory";import { getHostPosixTZ } from './RaftTimezone';
 
+const DISCONNECT_SUBSCRIPTION_TIMEOUT_MS = 1000;
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error(`timed out after ${timeoutMs}ms`)), timeoutMs);
+    promise.then(
+      (value) => {
+        clearTimeout(timeout);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timeout);
+        reject(error);
+      }
+    );
+  });
+}
+
 export default class RaftConnector {
 
   // Get system type callback
@@ -260,7 +278,7 @@ export default class RaftConnector {
       this._raftChannel = new RaftChannelWebSerial();
       this._channelConnMethod = 'WebSerial';
     } else if (method === 'Simulated') {
-      this._raftChannel = new RaftChannelSimulated(); 
+      this._raftChannel = new RaftChannelSimulated();
       this._channelConnMethod = 'Simulated';
     } else {
       RaftLog.warn('Unknown method: ' + method);
@@ -297,6 +315,7 @@ export default class RaftConnector {
       RaftLog.warn('Raft channel is not initialized.');
       return false;
     }
+
 
     // Store locator
     this._channelConnLocator = locator;
@@ -385,6 +404,18 @@ export default class RaftConnector {
       // Store reference to channel before async operations to avoid race condition
       const channelToDisconnect = this._raftChannel;
       this._raftChannel = null;
+
+      if (this._systemType?.subscribeForUpdates && channelToDisconnect.requiresSubscription()) {
+        try {
+          await withTimeout(
+            this._systemType.subscribeForUpdates(this._raftSystemUtils, false),
+            DISCONNECT_SUBSCRIPTION_TIMEOUT_MS
+          );
+          RaftLog.info("disconnect unsubscribed from updates");
+        } catch (error) {
+          RaftLog.warn(`disconnect unsubscribe for updates failed ${error}`);
+        }
+      }
       
       // Check if there is a RICREST command to send before disconnecting
       const ricRestCommand = channelToDisconnect.ricRestCmdBeforeDisconnect();
@@ -396,6 +427,23 @@ export default class RaftConnector {
       await new Promise(resolve => setTimeout(resolve, 1000));
       // await this.sendRICRESTMsg("bledisc", {});
       await channelToDisconnect.disconnect();
+    }
+  }
+
+  disconnectForPageUnload(): void {
+    this._retryIfLostIsConnected = false;
+
+    if (!this._raftChannel) {
+      return;
+    }
+
+    const channelToDisconnect = this._raftChannel;
+    this._raftChannel = null;
+
+    try {
+      void channelToDisconnect.disconnect();
+    } catch (error) {
+      RaftLog.warn(`RaftConnector.disconnectForPageUnload failed ${error}`);
     }
   }
 
@@ -703,7 +751,7 @@ export default class RaftConnector {
    */
   async checkConnPerformance(): Promise<number | undefined> {
 
-    // Sends a magic sequence of bytes followed by blocks of random data 
+    // Sends a magic sequence of bytes followed by blocks of random data
     // these will be ignored by the Raft library (as it recognises magic sequence)
     // and is used performance evaluation
     let prbsState = 1;
@@ -791,7 +839,7 @@ export default class RaftConnector {
       setTimeout(async () => {
 
         // Try to connect
-        const isConn = await this._connectToChannel();
+        const isConn = await this.connect(this._channelConnLocator);
         if (!isConn) {
           this._retryConnection();
         } else {
@@ -850,8 +898,8 @@ export default class RaftConnector {
 
   /**
    * onUpdateEvent - handle update event
-   * @param eventEnum 
-   * @param data 
+   * @param eventEnum
+   * @param data
    */
   _onUpdateEvent(eventEnum: RaftUpdateEvent, data: object | string | null | undefined = undefined): void {
     // Notify
