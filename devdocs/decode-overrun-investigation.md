@@ -8,19 +8,19 @@ The raftjs example dashboard is receiving an `AttributeHandler decode overrun` e
 
 **Error Message:**
 ```
-AttributeHandler decode overrun (msgBuffer): 
-  deviceKey=0_0 
-  deviceType=Cog Light Sensors 
-  debugMsgIndex=1 
-  attr.n=amb0 
-  attr.t=>H 
-  attrTypeSize=2 
-  curFieldBufIdx=45 
-  msgBuffer.length=46 
-  sampleStartIdx=37 
-  sampleEndIdx=46 
-  availableInSample=1 
-  availableInBuffer=1 
+AttributeHandler decode overrun (msgBuffer):
+  deviceKey=0_0
+  deviceType=Cog Light Sensors
+  debugMsgIndex=1
+  attr.n=amb0
+  attr.t=>H
+  attrTypeSize=2
+  curFieldBufIdx=45
+  msgBuffer.length=46
+  sampleStartIdx=37
+  sampleEndIdx=46
+  availableInSample=1
+  availableInBuffer=1
 ```
 
 **Key Facts:**
@@ -96,8 +96,8 @@ The mysterious `01` byte at the end needs to be identified:
 - Is it an uninitialized buffer value?
 - Was it added in a recent firmware change?
 
-**Check:** 
-- `git log -p components/DeviceLightSensors/DeviceLightSensors.cpp` around `formDeviceDataResponse()` 
+**Check:**
+- `git log -p components/DeviceLightSensors/DeviceLightSensors.cpp` around `formDeviceDataResponse()`
 - Look for recent changes that add bytes (new sensor data, flags, etc.)
 - Compare the byte count calculation in `getDeviceTypeRecord()` with actual `formDeviceDataResponse()` logic
 

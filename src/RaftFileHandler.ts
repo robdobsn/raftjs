@@ -587,7 +587,7 @@ export default class RaftFileHandler {
         const now = Date.now();
 
         // Check for overall timeouts
-        if ((now - startTime > overallTimeoutMs) || 
+        if ((now - startTime > overallTimeoutMs) ||
             (now - this._fileRxLastBlockTime > blockTimeoutMs)) {
           RaftLog.warn(`_receiveFileContents - time-out no new data received ` +
               `elapsed ${now - startTime}ms overallTimeout ${overallTimeoutMs}ms ` +
@@ -608,7 +608,7 @@ export default class RaftFileHandler {
         if (this._fileRxBuffer.length - this._fileRxLastAckPos >= this._fileRxBatchAckSize * this._fileRxBatchMsgSize) {
           ackRequired = true;
         }
-        // RaftLog.info(`_receiveFileContents ${ackRequired ? "ACK_REQUIRED" : "ACK_NOTREQUIRED"}  ${this._fileRxBuffer.length} ${this._fileRxLastAckPos} ${this._fileRxBatchAckSize} ${this._fileRxBatchMsgSize}`); 
+        // RaftLog.info(`_receiveFileContents ${ackRequired ? "ACK_REQUIRED" : "ACK_NOTREQUIRED"}  ${this._fileRxBuffer.length} ${this._fileRxLastAckPos} ${this._fileRxBatchAckSize} ${this._fileRxBatchMsgSize}`);
 
         // Check if ack required
         if (ackRequired) {
@@ -616,7 +616,7 @@ export default class RaftFileHandler {
           // Ack timing
           this._fileRxLastAckTime = Date.now();
           this._fileRxLastAckPos = this._fileRxBuffer.length;
-    
+
           // Okto message
           const cmdMsg = `{"cmdName":"dfAck","okto":${this._fileRxBuffer.length},` +
                         `"streamID":${this._fileRxStreamID},"rslt":"ok"}`;

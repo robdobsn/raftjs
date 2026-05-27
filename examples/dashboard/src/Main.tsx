@@ -41,6 +41,11 @@ export default function Main() {
   const [fileRefreshTrigger, setFileRefreshTrigger] = useState(0);
   const [downloadActive, setDownloadActive] = useState(false);
   const [logConfig, setLogConfig] = useState<LogConfig | null>(null);
+  // null = probe not completed yet; true/false = result of capability probe.
+  // Datalogging panels are only rendered when this is true, so legacy firmware
+  // (which doesn't implement the `datalog` endpoint) doesn't get spammed with
+  // unanswered `datalog?action=status` polls every 2 seconds.
+  const [datalogSupported, setDatalogSupported] = useState<boolean | null>(null);
 
   const [serialNo, setSerialNo] = useState<string>('');
 
@@ -123,6 +128,31 @@ export default function Main() {
     }
   }, [connectionStatus, connectionTime]);
 
+  // Probe firmware datalogging capability once per connection. Legacy firmware
+  // doesn't implement `datalog?...` and will let the request time out, which
+  // sendRICRESTMsg surfaces as { rslt: 'fail' }. We treat any non-'ok' as
+  // unsupported and hide the logging panels.
+  useEffect(() => {
+    if (connectionStatus !== RaftConnEvent.CONN_CONNECTED) {
+      setDatalogSupported(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const resp = await connManager.getConnector().sendRICRESTMsg(
+          'datalog?action=status', {}
+        );
+        if (cancelled) return;
+        const r = resp as any;
+        setDatalogSupported(r?.rslt === 'ok');
+      } catch {
+        if (!cancelled) setDatalogSupported(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [connectionStatus]);
+
   return (
     <div className="content-outer">
       {showSettings ? (
@@ -176,9 +206,13 @@ export default function Main() {
                   <StatusPanel />
                   {latencyTestEnabled && <LatencyTestPanel />}
                   <CommandPanel />
-                  <LogConfigPanel onConfigChanged={setLogConfig} disabled={false} />
-                  <LoggingPanel onLogStopped={() => setFileRefreshTrigger(n => n + 1)} pausePolling={downloadActive} logConfig={logConfig} />
-                  <LogFilesPanel refreshTrigger={fileRefreshTrigger} onDownloadActiveChange={setDownloadActive} />
+                  {datalogSupported && (
+                    <>
+                      <LogConfigPanel onConfigChanged={setLogConfig} disabled={false} />
+                      <LoggingPanel onLogStopped={() => setFileRefreshTrigger(n => n + 1)} pausePolling={downloadActive} logConfig={logConfig} />
+                      <LogFilesPanel refreshTrigger={fileRefreshTrigger} onDownloadActiveChange={setDownloadActive} />
+                    </>
+                  )}
                 </div>
                 <DevicesPanel />
               </>
