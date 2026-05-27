@@ -24,7 +24,8 @@ export default class CustomAttrHandler {
 
     private _jsFunctionCache = new Map<string, CustomAttrJsFn>();
 
-    public handleAttr(pollRespMetadata: DeviceTypePollRespMetadata, msgBuffer: Uint8Array, msgBufIdx: number): number[][] {
+    public handleAttr(pollRespMetadata: DeviceTypePollRespMetadata, msgBuffer: Uint8Array, msgBufIdx: number,
+                      msgEndIdx: number = msgBuffer.length): number[][] {
 
         // Number of bytes in each message
         const numMsgBytes = pollRespMetadata.b;
@@ -47,10 +48,12 @@ export default class CustomAttrHandler {
         }
 
         // Provide this poll block to the custom handler. Use the smaller of
-        // pollRespMetadata.b and the bytes actually available — variable-length
-        // samples may be shorter than b, and the last sample in a frame may not
-        // have b bytes remaining in the buffer.
-        const availableBytes = Math.min(numMsgBytes, msgBuffer.length - msgBufIdx);
+        // pollRespMetadata.b and the bytes actually available within the
+        // sample window — variable-length samples may be shorter than b, and
+        // the caller's msgEndIdx bounds us to the current sample (defaults to
+        // end-of-buffer when no per-sample bound is supplied).
+        const boundedEnd = Math.min(Math.max(msgEndIdx, msgBufIdx), msgBuffer.length);
+        const availableBytes = Math.min(numMsgBytes, boundedEnd - msgBufIdx);
         if (availableBytes <= 0) {
             return [];
         }

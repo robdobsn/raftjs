@@ -231,7 +231,7 @@ export class DeviceManager implements RaftDeviceMgrIF{
         // The rxMsg passed to this function has a 2-byte message type prefix (e.g. 0x0080)
         // added by the transport layer. After that prefix comes a devbin frame:
         //
-        // Devbin envelope (3 bytes):
+        // Current devbin envelope (3 bytes):
         //   Byte 0: magic+version   0xDB (valid range 0xDB–0xDF)
         //   Byte 1: topicIndex      0x00–0xFE = topic index; 0xFF = no topic
         //   Byte 2: envelopeSeqNum  uint8, wrapping — detects whole-frame drops
@@ -243,6 +243,12 @@ export class DeviceManager implements RaftDeviceMgrIF{
         //   Bytes 7-8:  devTypeIdx    uint16 big-endian — device type table index
         //   Byte  9:    deviceSeqNum  uint8, wrapping — per-device drop detection
         //   Bytes 10+:  samples       length-prefixed: [sampleLen(1B)][sampleData(sampleLen B)] × N
+        //
+        // Backwards compatibility:
+        //   Cog v1.9.5 is already in production and sends the older RaftCore devbin layout:
+        //   no 3-byte envelope, no deviceSeqNum byte, and raw fixed-size samples
+        //   [timestamp(2B)][payload] × N. Keep that path separate so current Axiom/Cog
+        //   frames continue to use the length-prefixed parser above.
         //
         // Example message (two device records; first record has two samples):
         //   0080 DB 01 07 0018 81 0000076a 000b 2a 07feff0000010008 07185707931400 01 000e 80 00000000 001f 05 05030001af01

@@ -278,7 +278,7 @@ export default class RaftConnector {
       this._raftChannel = new RaftChannelWebSerial();
       this._channelConnMethod = 'WebSerial';
     } else if (method === 'Simulated') {
-      this._raftChannel = new RaftChannelSimulated(); 
+      this._raftChannel = new RaftChannelSimulated();
       this._channelConnMethod = 'Simulated';
     } else {
       RaftLog.warn('Unknown method: ' + method);
@@ -760,7 +760,7 @@ export default class RaftConnector {
    */
   async checkConnPerformance(): Promise<number | undefined> {
 
-    // Sends a magic sequence of bytes followed by blocks of random data 
+    // Sends a magic sequence of bytes followed by blocks of random data
     // these will be ignored by the Raft library (as it recognises magic sequence)
     // and is used performance evaluation
     let prbsState = 1;

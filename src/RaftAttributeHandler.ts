@@ -45,8 +45,15 @@ export default class AttributeHandler {
         
         // console.log(`processMsgAttrGroup msg ${msgHexStr} timestamp ${timestamp} origTimestamp ${origTimestamp} msgBufIdx ${msgBufIdx}`)
 
+        // Per-sample decode boundary. The caller (DeviceManager) supplies a
+        // sampleEndIdx when walking a multi-sample frame; without it we fall
+        // back to the whole buffer. Clamp so it can't escape the buffer or
+        // sit before the current read cursor.
+        const rawSampleEnd = diagCtx?.sampleEndIdx ?? msgBuffer.length;
+        const msgEndIdx = Math.min(Math.max(rawSampleEnd, msgBufIdx), msgBuffer.length);
+
         // Extract msg timestamp
-        const { newBufIdx, timestampUs } = this.extractTimestampAndAdvanceIdx(msgBuffer, msgBufIdx, deviceTimeline);
+        const { newBufIdx, timestampUs } = this.extractTimestampAndAdvanceIdx(msgBuffer, msgBufIdx, deviceTimeline, msgEndIdx);
         if (newBufIdx < 0)
             return -1;
         msgBufIdx = newBufIdx;
@@ -64,7 +71,7 @@ export default class AttributeHandler {
         if ("c" in pollRespMetadata) {
 
             // Extract attribute values using custom handler
-            newAttrValues = this._customAttrHandler.handleAttr(pollRespMetadata, msgBuffer, msgBufIdx);
+            newAttrValues = this._customAttrHandler.handleAttr(pollRespMetadata, msgBuffer, msgBufIdx, msgEndIdx);
 
             // Apply per-attribute transforms that the custom handler doesn't handle
             for (let attrIdx = 0; attrIdx < pollRespMetadata.a.length && attrIdx < newAttrValues.length; attrIdx++) {
@@ -112,7 +119,7 @@ export default class AttributeHandler {
                 // console.log(`RaftAttrHdlr.processMsgAttrGroup attr ${attrDef.n} msgBufIdx ${msgBufIdx} timestampUs ${timestampUs} attrDef ${JSON.stringify(attrDef)}`);
 
                 // Process the attribute
-                const { values, newMsgBufIdx } = this.processMsgAttribute(attrDef, msgBuffer, msgBufIdx, msgDataStartIdx, pollRespMetadata, diagCtx);
+                const { values, newMsgBufIdx } = this.processMsgAttribute(attrDef, msgBuffer, msgBufIdx, msgDataStartIdx, msgEndIdx, pollRespMetadata, diagCtx);
                 if (newMsgBufIdx < 0) {
                     newAttrValues.push([]);
                     attrDecodeFailed = true;
@@ -200,9 +207,19 @@ export default class AttributeHandler {
             deviceTimeline.emaCalibrated = true;
             deviceTimeline.emaCalibrationPolls = 1;
         } else {
-            // EMA interval update from poll-to-poll gap
+            // EMA interval update from poll-to-poll gap.
+            // For multi-sample bursts the instant interval is the per-sample
+            // period; for single-sample polls it's the poll-to-poll period
+            // (which on 1-sample-per-poll devices is the only credible cadence
+            // we have). Both feed the same smoothed EMA so a single anomalous
+            // gap can't yank the model.
+            let instantIntervalUs = NaN;
             if (numNewDataPoints > 1) {
-                const instantIntervalUs = (timestampUs - deviceTimeline.emaPrevPollTimeUs) / numNewDataPoints;
+                instantIntervalUs = (timestampUs - deviceTimeline.emaPrevPollTimeUs) / numNewDataPoints;
+            } else if (numNewDataPoints === 1) {
+                instantIntervalUs = timestampUs - deviceTimeline.emaPrevPollTimeUs;
+            }
+            if (Number.isFinite(instantIntervalUs) && instantIntervalUs > 0) {
                 const alpha = deviceTimeline.emaCalibrationPolls < 20 ? 0.3 : 0.05;
                 deviceTimeline.emaIntervalUs = alpha * instantIntervalUs
                                               + (1.0 - alpha) * deviceTimeline.emaIntervalUs;
@@ -211,13 +228,18 @@ export default class AttributeHandler {
             deviceTimeline.emaCalibrationPolls++;
         }
 
-        // Assign timestamps: each sample steps forward by emaIntervalUs
+        // Assign timestamps: each sample steps forward by emaIntervalUs.
+        // Single-sample polls use the live poll timestamp directly - there's
+        // only one credible time for that sample and predicting from the model
+        // just adds error.
         const timestampsUs = Array(numNewDataPoints).fill(0);
-        const lastTimeUs = deviceTimeline.timestampsUs.length > 0 
-            ? deviceTimeline.timestampsUs[deviceTimeline.timestampsUs.length - 1] 
+        const lastTimeUs = deviceTimeline.timestampsUs.length > 0
+            ? deviceTimeline.timestampsUs[deviceTimeline.timestampsUs.length - 1]
             : -Infinity;
         for (let i = 0; i < numNewDataPoints; i++) {
-            timestampsUs[i] = deviceTimeline.emaLastSampleTimeUs + (i + 1) * deviceTimeline.emaIntervalUs;
+            timestampsUs[i] = numNewDataPoints === 1
+                ? timestampUs
+                : deviceTimeline.emaLastSampleTimeUs + (i + 1) * deviceTimeline.emaIntervalUs;
             // Ensure monotonically increasing timestamps
             if (i === 0 && timestampsUs[0] <= lastTimeUs) {
                 timestampsUs[0] = lastTimeUs + 1;
@@ -225,9 +247,11 @@ export default class AttributeHandler {
                 timestampsUs[i] = timestampsUs[i - 1] + 1;
             }
         }
-        // Advance the piecewise model cursor past all samples in this batch
+        // Re-sync the model cursor to the last emitted timestamp so that any
+        // monotonicity clamp or single-sample substitution above is reflected
+        // in the next batch's predictions.
         if (deviceTimeline.emaCalibrated && numNewDataPoints > 0) {
-            deviceTimeline.emaLastSampleTimeUs += numNewDataPoints * deviceTimeline.emaIntervalUs;
+            deviceTimeline.emaLastSampleTimeUs = timestampsUs[timestampsUs.length - 1];
         }
 
         // Check if timeline points need to be discarded
@@ -297,6 +321,7 @@ export default class AttributeHandler {
     }
 
     private processMsgAttribute(attrDef: DeviceTypeAttribute, msgBuffer: Uint8Array, msgBufIdx: number, msgDataStartIdx: number,
+                                msgEndIdx: number,
                                 pollRespMetadata?: DeviceTypePollRespMetadata, diagCtx?: AttrDecodeDiagContext): { values: (number | string)[], newMsgBufIdx: number} {
 
         // Current field message string index
@@ -338,13 +363,16 @@ export default class AttributeHandler {
         // Get number of bytes required to decode this attribute
         const attrTypeSize = structSizeOf(attrTypesOnly);
 
-        // Bound-check: against the message buffer, and (when known) against the
-        // declared sample boundary. A failure here means the device's emitted
-        // bytes are shorter than the registered device-type schema expects, or
-        // the schema uses an absolute position (`at`) outside the sample.
-        const sampleEnd = diagCtx?.sampleEndIdx;
+        // Bound-check: against the message buffer, and against the declared
+        // sample boundary. A failure here means the device's emitted bytes are
+        // shorter than the registered device-type schema expects, or the
+        // schema uses an absolute position (`at`) outside the sample.
+        // Absolute-position reads (`at`) are bounded only by the buffer,
+        // because `at` is intentionally a fixed offset relative to the sample
+        // start and may legitimately fall outside the current decode cursor
+        // window.
         const overrunsBuffer = curFieldBufIdx < 0 || curFieldBufIdx + attrTypeSize > msgBuffer.length;
-        const overrunsSample = !attrUsesAbsPos && sampleEnd !== undefined && curFieldBufIdx + attrTypeSize > sampleEnd;
+        const overrunsSample = !attrUsesAbsPos && curFieldBufIdx + attrTypeSize > msgEndIdx;
         if (overrunsBuffer || overrunsSample) {
             this.warnAttrOverrun(attrDef, msgBuffer, curFieldBufIdx, attrTypeSize, msgDataStartIdx,
                                  attrUsesAbsPos, pollRespMetadata, diagCtx,
@@ -520,11 +548,14 @@ export default class AttributeHandler {
         return value;
     }
 
-    private extractTimestampAndAdvanceIdx(msgBuffer: Uint8Array, msgBufIdx: number, timestampWrapHandler: DeviceTimeline): 
+    private extractTimestampAndAdvanceIdx(msgBuffer: Uint8Array, msgBufIdx: number, timestampWrapHandler: DeviceTimeline,
+                                          msgEndIdx: number = msgBuffer.length):
                     { newBufIdx: number, timestampUs: number } {
 
-        // Check there are enough bytes for the timestamp
-        if (msgBufIdx + this.POLL_RESULT_TIMESTAMP_SIZE > msgBuffer.length) {
+        // Check there are enough bytes for the timestamp (within the sample
+        // window, not just the message buffer).
+        const boundedEnd = Math.min(Math.max(msgEndIdx, msgBufIdx), msgBuffer.length);
+        if (msgBufIdx + this.POLL_RESULT_TIMESTAMP_SIZE > boundedEnd) {
             return { newBufIdx: -1, timestampUs: 0 };
         }
 
