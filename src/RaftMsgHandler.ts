@@ -74,6 +74,12 @@ export default class RaftMsgHandler {
   private _msgTrackTimerMs = 50;
   private _msgTrackLastCheckIdx = 0;
 
+  // Periodic comms-stats summary (DEBUG): gives a one-line health snapshot
+  // without per-message noise.
+  private _statsLogTimerMs = 30000;
+  private _statsLogLastTxCount = 0;
+  private _statsLogLastRxCount = 0;
+
   // report message callback dictionary. Add a callback to subscribe to report messages
   private _reportMsgCallbacks = new Map<string, (report: RaftReportMsg) => Promise<void>>();
 
@@ -107,9 +113,31 @@ export default class RaftMsgHandler {
       this._onMsgTrackTimer(true);
     }, this._msgTrackTimerMs);
 
+    // Periodic comms-stats summary timer
+    setTimeout(() => {
+      this._onStatsLogTimer(true);
+    }, this._statsLogTimerMs);
+
     // HDLC used to encode/decode the RICREST protocol
     this._miniHDLC = new RaftMiniHDLC();
     this._miniHDLC.setOnRxFrame(this._onHDLCFrameDecode.bind(this));
+  }
+
+  private _onStatsLogTimer(chainRecall: boolean): void {
+    // Only log if there was activity in the window (avoids spamming an idle
+    // log when the dashboard isn't connected to anything).
+    const txCount = this._commsStats._msgTxCount;
+    const rxCount = this._commsStats._msgRxCount;
+    if (txCount !== this._statsLogLastTxCount || rxCount !== this._statsLogLastRxCount) {
+      RaftLog.debug(`RaftMsgHandler stats: ${this._commsStats.getSummary()}`);
+      this._statsLogLastTxCount = txCount;
+      this._statsLogLastRxCount = rxCount;
+    }
+    if (chainRecall) {
+      setTimeout(() => {
+        this._onStatsLogTimer(true);
+      }, this._statsLogTimerMs);
+    }
   }
 
   registerForResults(msgResultHandler: RaftMessageResult) {
@@ -528,6 +556,12 @@ export default class RaftMsgHandler {
     // Record message re-use of number
     if (this._msgTrackInfos[this._currentMsgNumber].msgOutstanding) {
       this._commsStats.recordMsgNumCollision();
+      // A collision means we have wrapped msgNum back to a slot whose previous
+      // send is still awaiting a reply. This is rare in healthy operation and
+      // worth surfacing without enabling VERBOSE.
+      RaftLog.warn(
+        `msgTrackingTxCmdMsg msgNum ${this._currentMsgNumber} COLLISION - previous send still outstanding (total collisions ${this._commsStats._msgNumCollisions})`,
+      );
     }
     // Set tracking info
     this._msgTrackInfos[this._currentMsgNumber].set(
@@ -541,8 +575,10 @@ export default class RaftMsgHandler {
       reject,
     );
 
-    // Debug
-    RaftLog.debug(
+    // Per-message TX trace (verbose: every successful send shows here; pair
+    // with the verbose `_handleResponseMessages ... rslt Ok` line for the same
+    // msgNum to confirm the round-trip).
+    RaftLog.verbose(
       `msgTrackingTxCmdMsg msgNum ${this._currentMsgNumber} bridgeID ${bridgeID} msg ${RaftUtils.bufferToHex(msgFrame)} msgOutstanding ${this._msgTrackInfos[this._currentMsgNumber].msgOutstanding
       }`,
     );

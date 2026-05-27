@@ -17,12 +17,15 @@ import RaftDeviceMgrIF from "./RaftDeviceMgrIF";
 import { structPack, structSizeOf } from "./RaftStruct";
 // import RaftUtils from "./RaftUtils";
 
-// Devbin records carried over BLE/WebSocket come in two forms:
-//   lengthPrefixed - current firmware: each sample has a 1-byte length prefix
-//                    after the 8-byte record header (incl. deviceSeqNum).
-//   legacyRaw      - Cog v1.9.5 firmware: no envelope, no per-sample length,
-//                    fixed-size samples (2-byte timestamp + struct payload).
-type BinaryRecordPayloadFormat = "lengthPrefixed" | "legacyRaw";
+// Devbin record payload formats. See devdocs/devbin-protocol-versioning.md
+// for the full naming scheme and how this axis relates to the (orthogonal)
+// envelope axis.
+//   DevbinV1Framed - current firmware: per-record body is
+//                    [deviceSeq:1] [sampleLen:1][sample]...
+//   DevbinV0Fixed  - Cog v1.9.5 firmware: per-record body is
+//                    [sample][sample]... with each sample sized from typeinfo
+//                    (no deviceSeq, no per-sample length prefix).
+type DevbinPayloadFormat = "DevbinV1Framed" | "DevbinV0Fixed";
 
 export interface DeviceDecodedData {
     deviceKey: string;
@@ -106,7 +109,8 @@ export class DeviceManager implements RaftDeviceMgrIF{
         waitingQueue: Array<{resolve: (value: DeviceTypeInfo | undefined) => void, reject: (reason?: any) => void}>;
     } } = {};
 
-    // Rate-limit map for malformed-sample warnings (legacy-firmware compat).
+    // Rate-limit map for malformed-sample warnings (used by both devbin
+    // payload formats).
     private _malformedSampleWarnLastMs: { [warningKey: string]: number } = {};
 
     // Constructor
@@ -270,30 +274,32 @@ export class DeviceManager implements RaftDeviceMgrIF{
         // const debugMsgTime = Date.now();
         const debugMsgIndex = this._debugMsgIndex++;
 
-        // Message layout constants
+        // Message layout constants. Envelope variants and payload formats are
+        // defined in devdocs/devbin-protocol-versioning.md.
         const msgTypeLen = 2; // Transport-layer message type prefix (first two bytes, e.g. 0x0080)
-        const devbinEnvelopeLen = 3; // Devbin envelope: magic+version (1B) + topicIndex (1B) + envelopeSeqNum (1B)
-        const legacyDevbinEnvelopeLen = 2; // Intermediate/legacy envelope: magic+version (1B) + topicIndex (1B)
+        const envelopeV2Len = 3; // EnvelopeV2: magic+version (1B) + topicIndex (1B) + envelopeSeqNum (1B)
+        const envelopeV1Len = 2; // EnvelopeV1: magic+version (1B) + topicIndex (1B)
         const devbinMagicMin = 0xDB;
         const devbinMagicMax = 0xDF;
         const recordLenLen = 2; // Per-record length prefix (uint16 big-endian)
         const busInfoLen = 1; // statusBus byte: bit 7 = online, bit 6 = pending deletion, bits 3:0 = bus number
         const deviceAddrLen = 4; // Device address (uint32 big-endian)
         const devTypeIdxLen = 2; // Device type index (uint16 big-endian)
-        const deviceSeqNumLen = 1; // Per-device sequence counter
-        const currentRecordHeaderLen = busInfoLen + deviceAddrLen + devTypeIdxLen + deviceSeqNumLen; // = 8, minimum length-prefixed record body
-        const legacyRecordHeaderLen = busInfoLen + deviceAddrLen + devTypeIdxLen; // = 7, Cog v1.9.5 legacy record body header
+        const deviceSeqNumLen = 1; // Per-device sequence counter (DevbinV1Framed only)
+        const devbinV1FramedHeaderLen = busInfoLen + deviceAddrLen + devTypeIdxLen + deviceSeqNumLen; // = 8, min DevbinV1Framed record body
+        const devbinV0FixedHeaderLen = busInfoLen + deviceAddrLen + devTypeIdxLen; // = 7, DevbinV0Fixed record body header (Cog v1.9.5)
 
         // console.log(`DevMan.handleClientMsgBinary debugIdx ${debugMsgIndex} rxMsg.length ${rxMsg.length} rxMsg ${RaftUtils.bufferToHex(rxMsg)}`);
 
-        // Default to legacy raw layout (no envelope, payload starts right after
-        // the transport msgType) which is what Cog v1.9.5 firmware emits. If we
-        // detect a devbin envelope the payload format is re-resolved below.
+        // Default to EnvelopeNone + DevbinV0Fixed (no envelope, payload starts
+        // right after the transport msgType), which is what Cog v1.9.5 firmware
+        // emits. If an EnvelopeV1/V2 prefix is detected the payload format is
+        // re-resolved below.
         let msgPos = msgTypeLen;
-        let payloadFormat: BinaryRecordPayloadFormat = "legacyRaw";
+        let payloadFormat: DevbinPayloadFormat = "DevbinV0Fixed";
 
-        // Check for devbin envelope (magic+version + topicIndex [+ envelopeSeqNum])
-        if (rxMsg.length >= msgTypeLen + legacyDevbinEnvelopeLen) {
+        // Check for a devbin envelope (EnvelopeV1: magic+topic; EnvelopeV2: magic+topic+seq)
+        if (rxMsg.length >= msgTypeLen + envelopeV1Len) {
             const envelopeMagicVer = rxMsg[msgTypeLen];
             if ((envelopeMagicVer & 0xF0) === 0xD0) {
                 if ((envelopeMagicVer < devbinMagicMin) || (envelopeMagicVer > devbinMagicMax)) {
@@ -309,23 +315,23 @@ export class DeviceManager implements RaftDeviceMgrIF{
                     }
                 }
 
-                // Try current 3-byte envelope first, fall back to legacy 2-byte
-                // envelope (firmware between Cog v1.9.5 and current).
-                const currentMsgPos = msgTypeLen + devbinEnvelopeLen;
-                const legacyMsgPos = msgTypeLen + legacyDevbinEnvelopeLen;
-                if (this.hasValidRecordAt(rxMsg, currentMsgPos, recordLenLen, currentRecordHeaderLen)) {
-                    msgPos = currentMsgPos;
-                    payloadFormat = "lengthPrefixed";
-                } else if (this.hasValidRecordAt(rxMsg, legacyMsgPos, recordLenLen, legacyRecordHeaderLen)) {
-                    msgPos = legacyMsgPos;
-                    payloadFormat = "legacyRaw";
+                // Try EnvelopeV2 (3 bytes) first, then fall back to EnvelopeV1
+                // (2 bytes, intermediate firmware between Cog v1.9.5 and current).
+                const envelopeV2RecordPos = msgTypeLen + envelopeV2Len;
+                const envelopeV1RecordPos = msgTypeLen + envelopeV1Len;
+                if (this.hasValidRecordAt(rxMsg, envelopeV2RecordPos, recordLenLen, devbinV1FramedHeaderLen)) {
+                    msgPos = envelopeV2RecordPos;
+                    payloadFormat = "DevbinV1Framed";
+                } else if (this.hasValidRecordAt(rxMsg, envelopeV1RecordPos, recordLenLen, devbinV0FixedHeaderLen)) {
+                    msgPos = envelopeV1RecordPos;
+                    payloadFormat = "DevbinV0Fixed";
                 } else {
                     console.warn(`DevMan.handleClientMsgBinary debugIdx ${debugMsgIndex} invalid devbin envelope payload`);
                     return;
                 }
-            } else if (this.hasValidRecordAt(rxMsg, msgPos, recordLenLen, currentRecordHeaderLen)) {
-                // No envelope, but the first record looks length-prefixed
-                payloadFormat = "lengthPrefixed";
+            } else if (this.hasValidRecordAt(rxMsg, msgPos, recordLenLen, devbinV1FramedHeaderLen)) {
+                // EnvelopeNone, but the first record validates as DevbinV1Framed
+                payloadFormat = "DevbinV1Framed";
             }
         }
 
@@ -333,18 +339,18 @@ export class DeviceManager implements RaftDeviceMgrIF{
         while (msgPos < rxMsg.length) {
 
             // Check minimum length for record length prefix + record header.
-            // Use the legacy (smaller) header here as the floor; the per-record
-            // payload-format resolution below validates the larger 8-byte
-            // length-prefixed header when applicable.
+            // Use the DevbinV0Fixed (smaller) header here as the floor; the
+            // per-record payload-format resolution below validates the larger
+            // DevbinV1Framed header when applicable.
             const remainingLen = rxMsg.length - msgPos;
-            if (remainingLen < recordLenLen + legacyRecordHeaderLen) {
-                console.warn(`DevMan.handleClientMsgBinary debugIdx ${debugMsgIndex} invalid length ${rxMsg.length} < ${recordLenLen + legacyRecordHeaderLen + msgPos}`);
+            if (remainingLen < recordLenLen + devbinV0FixedHeaderLen) {
+                console.warn(`DevMan.handleClientMsgBinary debugIdx ${debugMsgIndex} invalid length ${rxMsg.length} < ${recordLenLen + devbinV0FixedHeaderLen + msgPos}`);
                 return;
             }
 
             // Get the record body length (bytes that follow the 2-byte length prefix)
             const recordLen = (rxMsg[msgPos] << 8) + rxMsg[msgPos + 1];
-            if ((recordLen < legacyRecordHeaderLen) || (recordLen > remainingLen - recordLenLen)) {
+            if ((recordLen < devbinV0FixedHeaderLen) || (recordLen > remainingLen - recordLenLen)) {
                 console.warn(`DevMan.handleClientMsgBinary debugIdx ${debugMsgIndex} invalid msgPos ${msgPos} recordLen ${recordLen} remainingAfterLenBytes ${remainingLen - recordLenLen}`);
                 return;
             }
@@ -367,32 +373,32 @@ export class DeviceManager implements RaftDeviceMgrIF{
             recordPos += devTypeIdxLen;
 
             // Common record header ends here. The deviceSeqNum byte is only
-            // present in lengthPrefixed records.
+            // present in DevbinV1Framed records.
             const commonRecordHeaderEndPos = recordPos;
             const samplesEndPos = msgPos + recordLenLen + recordLen;
 
             // Resolve per-record payload format using the type schema (if
-            // already cached). Legacy firmware reports bus=0 addr=0 for all
-            // direct devices, so we briefly look up by bus/devTypeIdx to find
-            // the schema before settling on the device key.
+            // already cached). DevbinV0Fixed firmware reports bus=0 addr=0 for
+            // all direct devices, so we briefly look up by bus/devTypeIdx to
+            // find the schema before settling on the device key.
             let recordPayloadFormat = payloadFormat;
-            let recordHeaderLen = recordPayloadFormat === "lengthPrefixed" ? currentRecordHeaderLen : legacyRecordHeaderLen;
+            let recordHeaderLen = recordPayloadFormat === "DevbinV1Framed" ? devbinV1FramedHeaderLen : devbinV0FixedHeaderLen;
             const resolvedDeviceTypeInfo = await this.getDeviceTypeInfo(busNum.toString(), devTypeIdx.toString());
             if (resolvedDeviceTypeInfo?.resp) {
                 recordPayloadFormat = this.resolveRecordPayloadFormat(rxMsg, commonRecordHeaderEndPos,
                     samplesEndPos, resolvedDeviceTypeInfo.resp, recordPayloadFormat, deviceSeqNumLen);
-                recordHeaderLen = recordPayloadFormat === "lengthPrefixed" ? currentRecordHeaderLen : legacyRecordHeaderLen;
+                recordHeaderLen = recordPayloadFormat === "DevbinV1Framed" ? devbinV1FramedHeaderLen : devbinV0FixedHeaderLen;
             }
             if (recordLen < recordHeaderLen) {
                 console.warn(`DevMan.handleClientMsgBinary debugIdx ${debugMsgIndex} invalid msgPos ${msgPos} recordLen ${recordLen} recordHeaderLen ${recordHeaderLen}`);
                 return;
             }
 
-            // Pending-deletion is only meaningful for lengthPrefixed records;
-            // legacy firmware reuses that bit for other status info.
-            const isPendingDeletion = (recordPayloadFormat === "lengthPrefixed") && ((statusByte & 0x40) !== 0);
+            // Pending-deletion is only meaningful for DevbinV1Framed records;
+            // DevbinV0Fixed firmware reuses that bit for other status info.
+            const isPendingDeletion = (recordPayloadFormat === "DevbinV1Framed") && ((statusByte & 0x40) !== 0);
             recordPos = commonRecordHeaderEndPos;
-            if (recordPayloadFormat === "lengthPrefixed") {
+            if (recordPayloadFormat === "DevbinV1Framed") {
                 // Per-device sequence counter (reserved for future drop detection)
                 // const deviceSeqNum = rxMsg[recordPos];
                 recordPos += deviceSeqNumLen;
@@ -405,9 +411,9 @@ export class DeviceManager implements RaftDeviceMgrIF{
             // console.log(`DevMan.handleClientMsgBinary debugIdx ${debugMsgIndex} bus ${busNum} isOnline ${isOnline} devAddr 0x${devAddr.toString(16)} devTypeIdx ${devTypeIdx} pollDataLen ${recordLen - recordHeaderLen}`);
 
             // Format device address as canonical hex and build device key.
-            // For legacy direct devices (bus=0 addr=0) different devTypeIdx
-            // values would collide on the same "0_0" key, so legacyRaw records
-            // disambiguate by appending the devTypeIdx.
+            // For DevbinV0Fixed direct devices (bus=0 addr=0) different
+            // devTypeIdx values would collide on the same "0_0" key, so
+            // DevbinV0Fixed records disambiguate by appending the devTypeIdx.
             const devAddrHex = formatDeviceAddrHex(devAddr);
             const deviceKey = this.getBinaryDeviceKey(busNum, devAddrHex, devTypeIdx, recordPayloadFormat);
 
@@ -424,13 +430,13 @@ export class DeviceManager implements RaftDeviceMgrIF{
             // Check if a device state already exists
             if (!(deviceKey in this._devicesState) || (this._devicesState[deviceKey].deviceTypeInfo === undefined)) {
 
-                // For lengthPrefixed (current firmware) try the richer
+                // For DevbinV1Framed (current firmware) try the richer
                 // per-device endpoint first (gives per-instance name/role),
-                // then fall back to the bus/type schema. Legacy firmware
+                // then fall back to the bus/type schema. DevbinV0Fixed firmware
                 // doesn't support the per-device endpoint (returns
-                // failBusMissing) so we skip it entirely for legacyRaw
+                // failBusMissing) so we skip it entirely for DevbinV0Fixed
                 // records to avoid noisy requests.
-                const deviceTypeInfo = recordPayloadFormat === "lengthPrefixed"
+                const deviceTypeInfo = recordPayloadFormat === "DevbinV1Framed"
                     ? (await this.getDeviceTypeInfo(deviceKey)
                         ?? resolvedDeviceTypeInfo
                         ?? await this.getDeviceTypeInfo(busNum.toString(), devTypeIdx.toString()))
@@ -496,7 +502,7 @@ export class DeviceManager implements RaftDeviceMgrIF{
                 const attrLengthsBefore = this.snapshotAttrLengths(deviceState.deviceAttributes, pollRespMetadata);
                 const timelineLenBefore = deviceState.deviceTimeline.timestampsUs.length;
                 const totalSamplesBefore = deviceState.deviceTimeline.totalSamplesAdded;
-                if (recordPayloadFormat === "lengthPrefixed") {
+                if (recordPayloadFormat === "DevbinV1Framed") {
                     while (pollDataPos < samplesEndPos) {
 
                         // Read sample length prefix
@@ -528,7 +534,7 @@ export class DeviceManager implements RaftDeviceMgrIF{
                         if (newMsgBufIdx < 0)
                         {
                             this.warnMalformedSample(
-                                `${deviceKey}:${devTypeIdx}:lengthPrefixed`,
+                                `${deviceKey}:${devTypeIdx}:DevbinV1Framed`,
                                 `DevMan.handleClientMsgBinary debugIdx ${debugMsgIndex} skipped malformed sample ` +
                                 `device=${deviceKey} devTypeIdx=${devTypeIdx} sampleLen=${sampleLen} respBytes=${pollRespMetadata.b}`
                             );
@@ -541,18 +547,18 @@ export class DeviceManager implements RaftDeviceMgrIF{
                         deviceState.stateChanged = true;
                     }
                 } else {
-                    const legacySampleLen = this.getLegacyRawSampleLen(pollRespMetadata);
-                    if (legacySampleLen <= 0) {
+                    const fixedSampleLen = this.getDevbinV0FixedSampleLen(pollRespMetadata);
+                    if (fixedSampleLen <= 0) {
                         this.warnMalformedSample(
-                            `${deviceKey}:${devTypeIdx}:legacyRawLen`,
-                            `DevMan.handleClientMsgBinary debugIdx ${debugMsgIndex} invalid legacy sample length ` +
+                            `${deviceKey}:${devTypeIdx}:DevbinV0FixedLen`,
+                            `DevMan.handleClientMsgBinary debugIdx ${debugMsgIndex} invalid DevbinV0Fixed sample length ` +
                             `device=${deviceKey} devTypeIdx=${devTypeIdx} respBytes=${pollRespMetadata.b}`
                         );
                     } else {
-                        while (pollDataPos + legacySampleLen <= samplesEndPos) {
+                        while (pollDataPos + fixedSampleLen <= samplesEndPos) {
                             const sampleStartPos = pollDataPos;
-                            const sampleEndPos = pollDataPos + legacySampleLen;
-                            // Legacy raw records are not length-prefixed, but
+                            const sampleEndPos = pollDataPos + fixedSampleLen;
+                            // DevbinV0Fixed records are not length-prefixed, but
                             // the fixed sample span gives the same bound.
                             const newMsgBufIdx = this._attributeHandler.processMsgAttrGroup(rxMsg, sampleStartPos,
                                 deviceState.deviceTimeline, pollRespMetadata,
@@ -569,23 +575,23 @@ export class DeviceManager implements RaftDeviceMgrIF{
                             if (newMsgBufIdx < 0)
                             {
                                 this.warnMalformedSample(
-                                    `${deviceKey}:${devTypeIdx}:legacyRaw`,
-                                    `DevMan.handleClientMsgBinary debugIdx ${debugMsgIndex} skipped malformed legacy sample ` +
-                                    `device=${deviceKey} devTypeIdx=${devTypeIdx} sampleLen=${legacySampleLen} respBytes=${pollRespMetadata.b}`
+                                    `${deviceKey}:${devTypeIdx}:DevbinV0Fixed`,
+                                    `DevMan.handleClientMsgBinary debugIdx ${debugMsgIndex} skipped malformed DevbinV0Fixed sample ` +
+                                    `device=${deviceKey} devTypeIdx=${devTypeIdx} sampleLen=${fixedSampleLen} respBytes=${pollRespMetadata.b}`
                                 );
-                                pollDataPos += legacySampleLen;
+                                pollDataPos += fixedSampleLen;
                                 continue;
                             }
 
-                            pollDataPos += legacySampleLen;
+                            pollDataPos += fixedSampleLen;
                             deviceState.stateChanged = true;
                         }
 
                         if (pollDataPos < samplesEndPos) {
                             this.warnMalformedSample(
-                                `${deviceKey}:${devTypeIdx}:legacyRawRemainder`,
-                                `DevMan.handleClientMsgBinary debugIdx ${debugMsgIndex} skipped trailing legacy sample bytes ` +
-                                `device=${deviceKey} devTypeIdx=${devTypeIdx} remaining=${samplesEndPos - pollDataPos} sampleLen=${legacySampleLen} respBytes=${pollRespMetadata.b}`
+                                `${deviceKey}:${devTypeIdx}:DevbinV0FixedRemainder`,
+                                `DevMan.handleClientMsgBinary debugIdx ${debugMsgIndex} skipped trailing DevbinV0Fixed sample bytes ` +
+                                `device=${deviceKey} devTypeIdx=${devTypeIdx} remaining=${samplesEndPos - pollDataPos} sampleLen=${fixedSampleLen} respBytes=${pollRespMetadata.b}`
                             );
                         }
                     }
@@ -948,7 +954,7 @@ export class DeviceManager implements RaftDeviceMgrIF{
     }
 
     ////////////////////////////////////////////////////////////////////////////
-    // Binary-record payload-format helpers (legacy-firmware compat)
+    // Devbin payload-format helpers. See devdocs/devbin-protocol-versioning.md.
     ////////////////////////////////////////////////////////////////////////////
 
     private hasValidRecordAt(rxMsg: Uint8Array, msgPos: number, recordLenLen: number, recordHeaderLen: number): boolean {
@@ -967,23 +973,23 @@ export class DeviceManager implements RaftDeviceMgrIF{
     }
 
     private resolveRecordPayloadFormat(rxMsg: Uint8Array, commonRecordHeaderEndPos: number, samplesEndPos: number,
-                pollRespMetadata: DeviceTypePollRespMetadata, preferredFormat: BinaryRecordPayloadFormat,
-                deviceSeqNumLen: number): BinaryRecordPayloadFormat {
-        const lengthPrefixedStartPos = commonRecordHeaderEndPos + deviceSeqNumLen;
-        const lengthPrefixedValid = this.areLengthPrefixedSamplesValid(rxMsg, lengthPrefixedStartPos, samplesEndPos, pollRespMetadata);
-        const legacySampleLen = this.getLegacyRawSampleLen(pollRespMetadata);
-        const legacyRawValid = this.areLegacyRawSamplesValid(commonRecordHeaderEndPos, samplesEndPos, legacySampleLen);
+                pollRespMetadata: DeviceTypePollRespMetadata, preferredFormat: DevbinPayloadFormat,
+                deviceSeqNumLen: number): DevbinPayloadFormat {
+        const framedStartPos = commonRecordHeaderEndPos + deviceSeqNumLen;
+        const framedValid = this.areDevbinV1FramedSamplesValid(rxMsg, framedStartPos, samplesEndPos, pollRespMetadata);
+        const fixedSampleLen = this.getDevbinV0FixedSampleLen(pollRespMetadata);
+        const fixedValid = this.areDevbinV0FixedSamplesValid(commonRecordHeaderEndPos, samplesEndPos, fixedSampleLen);
 
-        if (legacyRawValid && !lengthPrefixedValid) {
-            return "legacyRaw";
+        if (fixedValid && !framedValid) {
+            return "DevbinV0Fixed";
         }
-        if (lengthPrefixedValid && !legacyRawValid) {
-            return "lengthPrefixed";
+        if (framedValid && !fixedValid) {
+            return "DevbinV1Framed";
         }
         return preferredFormat;
     }
 
-    private areLengthPrefixedSamplesValid(rxMsg: Uint8Array, pollDataPos: number, samplesEndPos: number,
+    private areDevbinV1FramedSamplesValid(rxMsg: Uint8Array, pollDataPos: number, samplesEndPos: number,
                 pollRespMetadata: DeviceTypePollRespMetadata): boolean {
         if ((pollDataPos < 0) || (pollDataPos > samplesEndPos) || (samplesEndPos > rxMsg.length)) {
             return false;
@@ -991,7 +997,7 @@ export class DeviceManager implements RaftDeviceMgrIF{
         if (pollDataPos === samplesEndPos) {
             return true;
         }
-        const fixedSampleLen = pollRespMetadata.c ? 0 : this.getLegacyRawSampleLen(pollRespMetadata);
+        const fixedSampleLen = pollRespMetadata.c ? 0 : this.getDevbinV0FixedSampleLen(pollRespMetadata);
         let sampleCount = 0;
         while (pollDataPos < samplesEndPos) {
             const sampleLen = rxMsg[pollDataPos];
@@ -1008,27 +1014,27 @@ export class DeviceManager implements RaftDeviceMgrIF{
         return sampleCount > 0;
     }
 
-    private areLegacyRawSamplesValid(pollDataPos: number, samplesEndPos: number, legacySampleLen: number): boolean {
-        if ((legacySampleLen <= 0) || (pollDataPos < 0) || (pollDataPos > samplesEndPos)) {
+    private areDevbinV0FixedSamplesValid(pollDataPos: number, samplesEndPos: number, fixedSampleLen: number): boolean {
+        if ((fixedSampleLen <= 0) || (pollDataPos < 0) || (pollDataPos > samplesEndPos)) {
             return false;
         }
         const payloadLen = samplesEndPos - pollDataPos;
-        return (payloadLen > 0) && (payloadLen % legacySampleLen === 0);
+        return (payloadLen > 0) && (payloadLen % fixedSampleLen === 0);
     }
 
-    private getBinaryDeviceKey(busNum: number, devAddrHex: string, devTypeIdx: number, payloadFormat: BinaryRecordPayloadFormat): string {
+    private getBinaryDeviceKey(busNum: number, devAddrHex: string, devTypeIdx: number, payloadFormat: DevbinPayloadFormat): string {
         const baseDeviceKey = getDeviceKey(busNum.toString(), devAddrHex);
-        // Legacy direct devices all report bus=0 addr=0, so distinct device
-        // types would otherwise collide on the same "0_0" key.
-        if ((payloadFormat === "legacyRaw") && (busNum === 0) && (devAddrHex === "0")) {
+        // DevbinV0Fixed direct devices all report bus=0 addr=0, so distinct
+        // device types would otherwise collide on the same "0_0" key.
+        if ((payloadFormat === "DevbinV0Fixed") && (busNum === 0) && (devAddrHex === "0")) {
             return `${baseDeviceKey}_${devTypeIdx}`;
         }
         return baseDeviceKey;
     }
 
-    private getLegacyRawSampleLen(pollRespMetadata: DeviceTypePollRespMetadata): number {
-        const legacyTimestampLen = 2;
-        return legacyTimestampLen + this.getPollRespPayloadSize(pollRespMetadata);
+    private getDevbinV0FixedSampleLen(pollRespMetadata: DeviceTypePollRespMetadata): number {
+        const timestampLen = 2;
+        return timestampLen + this.getPollRespPayloadSize(pollRespMetadata);
     }
 
     private getPollRespPayloadSize(pollRespMetadata: DeviceTypePollRespMetadata): number {

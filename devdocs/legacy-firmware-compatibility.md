@@ -1,5 +1,13 @@
 # Legacy Firmware (Cog v1.9.5) Compatibility — Final Design
 
+> **Note on terminology**: This document was written while "legacy" was
+> still the working label for the older devbin variant. The naming has
+> since been formalised — see
+> [devbin-protocol-versioning.md](devbin-protocol-versioning.md). When
+> reading below, treat `legacyRaw` as `DevbinV0Fixed` and `lengthPrefixed`
+> as `DevbinV1Framed`. The envelope variants are `EnvelopeNone`,
+> `EnvelopeV1` (2-byte) and `EnvelopeV2` (3-byte).
+
 ## Summary
 
 RaftJS must support two devbin record body layouts and two `devman/typeinfo`

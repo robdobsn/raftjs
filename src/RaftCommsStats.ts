@@ -139,4 +139,22 @@ export default class RaftCommsStats {
   recordFileBytes(bytes: number): void {
     this._fileBytes += bytes;
   }
+
+  /**
+   * One-line health summary suitable for periodic DEBUG logging. Includes
+   * counters that indicate anomalies (collisions, unmatched, retries,
+   * timeouts) plus round-trip latency so an observer can tell at a glance
+   * whether the link is healthy without enabling per-message VERBOSE traffic.
+   */
+  getSummary(): string {
+    return (
+      `tx ${this._msgTxCount} rx ${this._msgRxCount}` +
+      ` txRate ${this.getMsgTxRate().toFixed(1)}/s rxRate ${this.getMsgRxRate().toFixed(1)}/s` +
+      ` retries ${this._msgRetry} timeouts ${this._msgTimeout}` +
+      ` collisions ${this._msgNumCollisions} unmatched ${this._msgNumUnmatched}` +
+      ` noConn ${this._msgNoConnection} tooShort ${this._msgTooShort}` +
+      ` rtt last/best/worst ${this._msgRoundtripLastMs}/${this._msgRoundtripBestMs}/${this._msgRoundtripWorstMs}ms` +
+      ` stream ${this._streamBytes}B file ${this._fileBytes}B`
+    );
+  }
 }
