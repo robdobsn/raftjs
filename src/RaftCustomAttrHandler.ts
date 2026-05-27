@@ -52,8 +52,8 @@ export default class CustomAttrHandler {
         // sample window — variable-length samples may be shorter than b, and
         // the caller's msgEndIdx bounds us to the current sample (defaults to
         // end-of-buffer when no per-sample bound is supplied).
-        const boundedEnd = Math.min(Math.max(msgEndIdx, msgBufIdx), msgBuffer.length);
-        const availableBytes = Math.min(numMsgBytes, boundedEnd - msgBufIdx);
+        const boundedMsgEndIdx = Math.min(Math.max(msgEndIdx, msgBufIdx), msgBuffer.length);
+        const availableBytes = Math.min(numMsgBytes, boundedMsgEndIdx - msgBufIdx);
         if (availableBytes <= 0) {
             return [];
         }

@@ -355,7 +355,7 @@ describe("CustomAttrHandler with transpiled pseudocode", () => {
         const bufData = new Uint8Array([1, 2, 3]); // only 3 bytes, metadata length is 10
 
         const result = handler.handleAttr(meta, bufData, 0);
-        expect(result[0]).toEqual([1]);
+        expect(result).toEqual([[1]]);
     });
 
     test("msgBufIdx offsets into the message buffer", () => {
