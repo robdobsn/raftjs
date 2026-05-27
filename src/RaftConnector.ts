@@ -25,6 +25,24 @@ import { RaftUpdateEvent, RaftUpdateEventNames } from "./RaftUpdateEvents";
 import RaftUpdateManager from "./RaftUpdateManager";
 import { createBLEChannel } from "./RaftChannelBLEFactory";import { getHostPosixTZ } from './RaftTimezone';
 
+const DISCONNECT_SUBSCRIPTION_TIMEOUT_MS = 1000;
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error(`timed out after ${timeoutMs}ms`)), timeoutMs);
+    promise.then(
+      (value) => {
+        clearTimeout(timeout);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timeout);
+        reject(error);
+      }
+    );
+  });
+}
+
 export default class RaftConnector {
 
   // Get system type callback
@@ -385,7 +403,23 @@ export default class RaftConnector {
       // Store reference to channel before async operations to avoid race condition
       const channelToDisconnect = this._raftChannel;
       this._raftChannel = null;
-      
+
+      // If the channel uses publish subscriptions, send an explicit unsubscribe
+      // so the device tears down its pub topic cleanly rather than relying on
+      // the link drop. Bounded by a timeout because the firmware may already
+      // be unreachable.
+      if (this._systemType?.subscribeForUpdates && channelToDisconnect.requiresSubscription()) {
+        try {
+          await withTimeout(
+            this._systemType.subscribeForUpdates(this._raftSystemUtils, false),
+            DISCONNECT_SUBSCRIPTION_TIMEOUT_MS
+          );
+          RaftLog.info("disconnect unsubscribed from updates");
+        } catch (error) {
+          RaftLog.warn(`disconnect unsubscribe for updates failed ${error}`);
+        }
+      }
+
       // Check if there is a RICREST command to send before disconnecting
       const ricRestCommand = channelToDisconnect.ricRestCmdBeforeDisconnect();
       if (ricRestCommand) {
@@ -396,6 +430,29 @@ export default class RaftConnector {
       await new Promise(resolve => setTimeout(resolve, 1000));
       // await this.sendRICRESTMsg("bledisc", {});
       await channelToDisconnect.disconnect();
+    }
+  }
+
+  /**
+   * Fire-and-forget disconnect for `beforeunload`/`pagehide` handlers, which
+   * cannot await. Skips the unsubscribe round-trip and the pre-disconnect
+   * RICREST so the page can unload promptly; the channel's own disconnect()
+   * is started but not awaited.
+   */
+  disconnectForPageUnload(): void {
+    this._retryIfLostIsConnected = false;
+
+    if (!this._raftChannel) {
+      return;
+    }
+
+    const channelToDisconnect = this._raftChannel;
+    this._raftChannel = null;
+
+    try {
+      void channelToDisconnect.disconnect();
+    } catch (error) {
+      RaftLog.warn(`RaftConnector.disconnectForPageUnload failed ${error}`);
     }
   }
 

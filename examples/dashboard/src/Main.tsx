@@ -89,6 +89,22 @@ export default function Main() {
     };
   }, []);
 
+  // Fire-and-forget disconnect on page hide/unload so the device sees a clean
+  // teardown (explicit unsubscribe + GATT close) rather than just a dropped
+  // link. `pagehide` is preferred over `beforeunload` (BFCache-friendly and
+  // fires on mobile background).
+  useEffect(() => {
+    const handler = () => {
+      try {
+        connManager.getConnector().disconnectForPageUnload();
+      } catch {
+        // best-effort: page is unloading
+      }
+    };
+    window.addEventListener('pagehide', handler);
+    return () => window.removeEventListener('pagehide', handler);
+  }, []);
+
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (menuRef.current && !menuRef.current.contains(event.target as Node)) {

@@ -41,6 +41,7 @@ export default class RaftChannelBLE implements RaftChannel {
   // Connected flag and retries
   private _isConnected = false;
   private readonly _maxConnRetries = 3;
+  private readonly _connRetryDelayMs = 500;
 
   // Event listener fn
   private _eventListenerFn: ((event: Event) => void) | null = null;
@@ -120,6 +121,18 @@ export default class RaftChannelBLE implements RaftChannel {
     return this._bleDevice || "";
   }
 
+  private async disconnectGattBeforeRetry(): Promise<void> {
+    if (!this._bleDevice?.gatt?.connected) {
+      return;
+    }
+
+    try {
+      await this._bleDevice.gatt.disconnect();
+    } catch (error) {
+      RaftLog.warn(`RaftChannelBLE.connect - cannot disconnect before retry ${error}`);
+    }
+  }
+
   // Connect to a device
   async connect(locator: string | object, _connectorOptions: ConnectorOptions): Promise<boolean> {
     // RaftLog.debug(`Selected device: ${deviceID}`);
@@ -159,10 +172,19 @@ export default class RaftChannelBLE implements RaftChannel {
               }
 
               if (!service) {
+                if (connRetry === this._maxConnRetries - 1) {
+                  RaftLog.warn(
+                    `RaftChannelBLE.connect - cannot get primary service - attempt #${connRetry + 1} - giving up`
+                  );
+                  return false;
+                }
+
                 RaftLog.warn(
-                  `RaftChannelBLE.connect - cannot get primary service - giving up`
+                  `RaftChannelBLE.connect - cannot get primary service - attempt #${connRetry + 1} - retrying`
                 );
-                return false;
+                await this.disconnectGattBeforeRetry();
+                await new Promise(resolve => setTimeout(resolve, this._connRetryDelayMs));
+                continue;
               }
               RaftLog.debug(
                 `RaftChannelBLE.connect - found service: ${service.uuid}`

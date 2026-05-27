@@ -192,8 +192,33 @@ export default class RaftChannelWebSerial implements RaftChannel {
 
     RaftLog.debug(`RaftChannelWebSerial.disconnect attempting to close webserial`);
 
-    while (this._reader) {
+    // Cancel the active read with a 1s ceiling — reader.cancel() can hang if
+    // the underlying device is gone, so race it against a timeout.
+    const reader = this._reader;
+    if (reader) {
+      try {
+        await Promise.race([
+          reader.cancel(),
+          new Promise((resolve) => setTimeout(resolve, 1000)),
+        ]);
+      } catch (err) {
+        RaftLog.debug(`RaftChannelWebSerial.disconnect reader cancel failed ${err}`);
+      }
+    }
+
+    // Wait up to 1s for the read loop to clear _reader itself. If it doesn't,
+    // force the release so disconnect() can't hang forever (e.g. USB pulled).
+    const readerReleaseStartMs = Date.now();
+    while (this._reader && Date.now() - readerReleaseStartMs < 1000) {
       await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    if (this._reader) {
+      try {
+        this._reader.releaseLock();
+      } catch (err) {
+        RaftLog.debug(`RaftChannelWebSerial.disconnect reader release failed ${err}`);
+      }
+      this._reader = undefined;
     }
 
     // Disconnect webserial

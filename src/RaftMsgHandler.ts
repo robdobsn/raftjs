@@ -126,8 +126,8 @@ export default class RaftMsgHandler {
   private _onStatsLogTimer(chainRecall: boolean): void {
     // Only log if there was activity in the window (avoids spamming an idle
     // log when the dashboard isn't connected to anything).
-    const txCount = this._commsStats._msgTxCount;
-    const rxCount = this._commsStats._msgRxCount;
+    const txCount = this._commsStats.getMsgTxCount();
+    const rxCount = this._commsStats.getMsgRxCount();
     if (txCount !== this._statsLogLastTxCount || rxCount !== this._statsLogLastRxCount) {
       RaftLog.debug(`RaftMsgHandler stats: ${this._commsStats.getSummary()}`);
       this._statsLogLastTxCount = txCount;

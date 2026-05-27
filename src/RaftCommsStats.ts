@@ -77,6 +77,14 @@ export default class RaftCommsStats {
     this._msgTxCountInWindow++;
   }
 
+  getMsgTxCount(): number {
+    return this._msgTxCount;
+  }
+
+  getMsgRxCount(): number {
+    return this._msgRxCount;
+  }
+
   getMsgTxRate(): number {
     if (this._msgTxLastCalcMs + 1000 < Date.now()) {
       this._msgTxRate =
