@@ -119,7 +119,7 @@ export default class AttributeHandler {
                 // console.log(`RaftAttrHdlr.processMsgAttrGroup attr ${attrDef.n} msgBufIdx ${msgBufIdx} timestampUs ${timestampUs} attrDef ${JSON.stringify(attrDef)}`);
 
                 // Process the attribute
-                const { values, newMsgBufIdx } = this.processMsgAttribute(attrDef, msgBuffer, msgBufIdx, msgDataStartIdx, msgEndIdx, pollRespMetadata, diagCtx);
+                const { values, newMsgBufIdx } = this.processMsgAttribute(attrDef, msgBuffer, msgBufIdx, msgDataStartIdx, boundedMsgEndIdx, pollRespMetadata, diagCtx);
                 if (newMsgBufIdx < 0) {
                     newAttrValues.push([]);
                     attrDecodeFailed = true;
