@@ -553,7 +553,7 @@ export class DeviceManager implements RaftDeviceMgrIF{
                         deviceState.stateChanged = true;
                     }
                 } else {
-                    const fixedSampleLen = this.getDevbinV0FixedSampleLen(pollRespMetadata);
+                    const fixedSampleLen = this.getDevbinV0FixedSampleLen(pollRespMetadata, pollDataPos, samplesEndPos);
                     if (fixedSampleLen <= 0) {
                         this.warnMalformedSample(
                             `${deviceKey}:${devTypeIdx}:DevbinV0FixedLen`,
@@ -983,7 +983,7 @@ export class DeviceManager implements RaftDeviceMgrIF{
                 deviceSeqNumLen: number): DevbinPayloadFormat {
         const framedStartPos = commonRecordHeaderEndPos + deviceSeqNumLen;
         const framedValid = this.areDevbinV1FramedSamplesValid(rxMsg, framedStartPos, samplesEndPos, pollRespMetadata);
-        const fixedSampleLen = this.getDevbinV0FixedSampleLen(pollRespMetadata);
+        const fixedSampleLen = this.getDevbinV0FixedSampleLen(pollRespMetadata, commonRecordHeaderEndPos, samplesEndPos);
         const fixedValid = this.areDevbinV0FixedSamplesValid(commonRecordHeaderEndPos, samplesEndPos, fixedSampleLen);
 
         if (fixedValid && !framedValid) {
@@ -1003,7 +1003,7 @@ export class DeviceManager implements RaftDeviceMgrIF{
         if (pollDataPos === samplesEndPos) {
             return true;
         }
-        const fixedSampleLen = pollRespMetadata.c ? 0 : this.getDevbinV0FixedSampleLen(pollRespMetadata);
+        const fixedSampleLen = this.getDevbinV1FramedSampleLen(pollRespMetadata);
         let sampleCount = 0;
         while (pollDataPos < samplesEndPos) {
             const sampleLen = rxMsg[pollDataPos];
@@ -1025,7 +1025,11 @@ export class DeviceManager implements RaftDeviceMgrIF{
             return false;
         }
         const payloadLen = samplesEndPos - pollDataPos;
-        return (payloadLen > 0) && (payloadLen % fixedSampleLen === 0);
+        return this.isDevbinV0FixedSampleLenValid(payloadLen, fixedSampleLen);
+    }
+
+    private isDevbinV0FixedSampleLenValid(payloadLen: number, fixedSampleLen: number): boolean {
+        return (fixedSampleLen > 0) && (payloadLen > 0) && (payloadLen % fixedSampleLen === 0);
     }
 
     private getBinaryDeviceKey(busNum: number, devAddrHex: string, devTypeIdx: number, payloadFormat: DevbinPayloadFormat): string {
@@ -1038,33 +1042,57 @@ export class DeviceManager implements RaftDeviceMgrIF{
         return baseDeviceKey;
     }
 
-    private getDevbinV0FixedSampleLen(pollRespMetadata: DeviceTypePollRespMetadata): number {
+    private getDevbinV0FixedSampleLen(pollRespMetadata: DeviceTypePollRespMetadata, pollDataPos: number, samplesEndPos: number): number {
         const timestampLen = 2;
-        return timestampLen + this.getPollRespPayloadSize(pollRespMetadata);
+        const payloadLen = samplesEndPos - pollDataPos;
+        const declaredPayloadLen = pollRespMetadata.b;
+        const declaredSampleLen = declaredPayloadLen > 0 ? timestampLen + declaredPayloadLen : 0;
+        if (this.isDevbinV0FixedSampleLenValid(payloadLen, declaredSampleLen)) {
+            return declaredSampleLen;
+        }
+
+        // DevbinV0Fixed records have no sampleLen prefix, so old firmware
+        // sometimes needs a schema-derived fallback. Prefer .b whenever it
+        // fits the actual record and only fall back when the record length
+        // proves the declared size cannot be the fixed stride.
+        const attrPayloadLen = this.getDevbinV0FixedAttrPayloadSize(pollRespMetadata);
+        const attrSampleLen = attrPayloadLen !== undefined ? timestampLen + attrPayloadLen : 0;
+        if ((attrPayloadLen !== undefined) &&
+                (attrPayloadLen !== declaredPayloadLen) &&
+                this.isDevbinV0FixedSampleLenValid(payloadLen, attrSampleLen)) {
+            return attrSampleLen;
+        }
+
+        return declaredSampleLen;
     }
 
-    private getPollRespPayloadSize(pollRespMetadata: DeviceTypePollRespMetadata): number {
+    private getDevbinV1FramedSampleLen(pollRespMetadata: DeviceTypePollRespMetadata): number {
+        if (pollRespMetadata.c || pollRespMetadata.b <= 0) {
+            return 0;
+        }
+        const timestampLen = 2;
+        return timestampLen + pollRespMetadata.b;
+    }
+
+    private getDevbinV0FixedAttrPayloadSize(pollRespMetadata: DeviceTypePollRespMetadata): number | undefined {
         if (pollRespMetadata.c) {
-            return pollRespMetadata.b;
+            return undefined;
         }
         let attrPayloadLen = 0;
         for (const attrDef of pollRespMetadata.a) {
             if (!attrDef.t) {
-                return pollRespMetadata.b;
+                return undefined;
+            }
+            if (attrDef.at !== undefined) {
+                return undefined;
             }
             try {
                 attrPayloadLen += structSizeOf(attrDef.t);
             } catch {
-                return pollRespMetadata.b;
+                return undefined;
             }
         }
-        // Cog v1.9.5 light metadata reports the direct-sensor payload size
-        // doubled, but the legacy raw record contains one fixed payload
-        // matching the attribute schema.
-        if ((attrPayloadLen > 0) && (pollRespMetadata.b > 0) && (attrPayloadLen <= pollRespMetadata.b)) {
-            return attrPayloadLen;
-        }
-        return pollRespMetadata.b;
+        return attrPayloadLen > 0 ? attrPayloadLen : undefined;
     }
 
     private warnMalformedSample(warningKey: string, message: string): void {
