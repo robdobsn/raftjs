@@ -104,6 +104,33 @@ describe("DeviceManager binary devbin parsing", () => {
         expect(deviceState.deviceAttributes.humidity.values).toEqual([55.5]);
     });
 
+    it("prefers declared legacy fixed sample size when it matches the record", async () => {
+        const paddedInfo = makeTypeInfo("PaddedFixed", 10, [
+            { n: "first", t: ">H" },
+            { n: "second", t: ">H" }
+        ]);
+        const deviceManager = await makeDeviceManager({ "7": paddedInfo });
+        const rxMsg = Uint8Array.from([
+            0x00, 0x80,
+            0x00, 0x13,
+            0x80,
+            0x00, 0x00, 0x00, 0x00,
+            0x00, 0x07,
+            0x00, 0x01,
+            0x00, 0x07,
+            0x00, 0x08,
+            0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff
+        ]);
+
+        await deviceManager.handleClientMsgBinary(rxMsg);
+
+        const deviceState = deviceManager.getDeviceState("0_0_7");
+        expect(deviceState.deviceType).toBe("PaddedFixed");
+        expect(deviceState.deviceTimeline.totalSamplesAdded).toBe(1);
+        expect(deviceState.deviceAttributes.first.values).toEqual([7]);
+        expect(deviceState.deviceAttributes.second.values).toEqual([8]);
+    });
+
     it("decodes Cog v1.9.5 legacy raw accelerometer records", async () => {
         const deviceManager = await makeDeviceManager({ "4": accelInfo });
         const rxMsg = Uint8Array.from([
