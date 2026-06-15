@@ -588,6 +588,34 @@ export default class RaftChannelSimulated implements RaftChannel {
 
         return true;
       }
+      case "SCD30": {
+        if (dataBlockSizeBytes < 24) {
+          return false;
+        }
+
+        const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
+        const co2Ppm = clamp(
+          850 + 320 * Math.sin(deviceTimeMs / 6500) + 45 * Math.sin(deviceTimeMs / 1400),
+          400,
+          2000
+        );
+        const temperatureC = clamp(
+          22 + 2.2 * Math.sin(deviceTimeMs / 11000 + Math.PI / 5),
+          -40,
+          125
+        );
+        const humidityPercent = clamp(
+          48 + 14 * Math.sin(deviceTimeMs / 9000 + Math.PI / 2),
+          0,
+          100
+        );
+
+        return (
+          this._writeFloat32BytesAtOffsets(dataView, bytePos, [6, 7, 9, 10], co2Ppm) &&
+          this._writeFloat32BytesAtOffsets(dataView, bytePos, [12, 13, 15, 16], temperatureC) &&
+          this._writeFloat32BytesAtOffsets(dataView, bytePos, [18, 19, 21, 22], humidityPercent)
+        );
+      }
       case "RoboticalLEDRing": {
         if (dataBlockSizeBytes < 1) {
           return false;
@@ -767,6 +795,30 @@ export default class RaftChannelSimulated implements RaftChannel {
     return bytePos + valueSize;
   }
 
+  private _writeFloat32BytesAtOffsets(
+    dataView: DataView,
+    baseBytePos: number,
+    offsets: number[],
+    value: number
+  ): boolean {
+    if (offsets.length < 4) {
+      return false;
+    }
+
+    const maxOffset = Math.max(...offsets);
+    if (baseBytePos + maxOffset >= dataView.byteLength) {
+      return false;
+    }
+
+    const scratchBuffer = new ArrayBuffer(4);
+    new DataView(scratchBuffer).setFloat32(0, value, false);
+    const bytes = new Uint8Array(scratchBuffer);
+    for (let idx = 0; idx < 4; idx++) {
+      dataView.setUint8(baseBytePos + offsets[idx], bytes[idx]);
+    }
+    return true;
+  }
+
   private _byteSizeForType(typeCode: string): number {
     switch (typeCode) {
       case "b":
@@ -853,6 +905,45 @@ export default class RaftChannelSimulated implements RaftChannel {
               }
           ]
        }
+    },
+    "SCD30": {
+      "name": "CO2 Sensor",
+      "desc": "",
+      "manu": "Sensirion",
+      "type": "SCD30",
+      "clas": ["CO2", "TEMP", "RH"],
+      "resp": {
+        "b": 24,
+        "a": [
+          {
+            "n": "CO2",
+            "t": ">f",
+            "at": [6, 7, 9, 10],
+            "u": "ppm",
+            "r": [0, 40000],
+            "f": ".1f",
+            "o": "float"
+          },
+          {
+            "n": "temperature",
+            "t": ">f",
+            "at": [12, 13, 15, 16],
+            "u": "C",
+            "r": [-40, 125],
+            "f": ".2f",
+            "o": "float"
+          },
+          {
+            "n": "humidity",
+            "t": ">f",
+            "at": [18, 19, 21, 22],
+            "u": "%RH",
+            "r": [0, 100],
+            "f": ".2f",
+            "o": "float"
+          }
+        ]
+      }
     },
     "LSM6DS": {
       "name": "LSM6DS",

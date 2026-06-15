@@ -1003,7 +1003,7 @@ export class DeviceManager implements RaftDeviceMgrIF{
         if (pollDataPos === samplesEndPos) {
             return true;
         }
-        const fixedSampleLen = pollRespMetadata.c ? 0 : this.getDevbinV0FixedSampleLen(pollRespMetadata);
+        const fixedSampleLen = this.getDevbinV1FramedSampleLen(pollRespMetadata);
         let sampleCount = 0;
         while (pollDataPos < samplesEndPos) {
             const sampleLen = rxMsg[pollDataPos];
@@ -1040,17 +1040,29 @@ export class DeviceManager implements RaftDeviceMgrIF{
 
     private getDevbinV0FixedSampleLen(pollRespMetadata: DeviceTypePollRespMetadata): number {
         const timestampLen = 2;
-        return timestampLen + this.getPollRespPayloadSize(pollRespMetadata);
+        return timestampLen + this.getDevbinV0FixedPayloadSize(pollRespMetadata);
     }
 
-    private getPollRespPayloadSize(pollRespMetadata: DeviceTypePollRespMetadata): number {
+    private getDevbinV1FramedSampleLen(pollRespMetadata: DeviceTypePollRespMetadata): number {
+        if (pollRespMetadata.c || pollRespMetadata.b <= 0) {
+            return 0;
+        }
+        const timestampLen = 2;
+        return timestampLen + pollRespMetadata.b;
+    }
+
+    private getDevbinV0FixedPayloadSize(pollRespMetadata: DeviceTypePollRespMetadata): number {
         if (pollRespMetadata.c) {
             return pollRespMetadata.b;
         }
         let attrPayloadLen = 0;
+        let usesAbsolutePositions = false;
         for (const attrDef of pollRespMetadata.a) {
             if (!attrDef.t) {
                 return pollRespMetadata.b;
+            }
+            if (attrDef.at !== undefined) {
+                usesAbsolutePositions = true;
             }
             try {
                 attrPayloadLen += structSizeOf(attrDef.t);
@@ -1058,9 +1070,13 @@ export class DeviceManager implements RaftDeviceMgrIF{
                 return pollRespMetadata.b;
             }
         }
-        // Cog v1.9.5 light metadata reports the direct-sensor payload size
-        // doubled, but the legacy raw record contains one fixed payload
-        // matching the attribute schema.
+        if (usesAbsolutePositions && pollRespMetadata.b > 0) {
+            return pollRespMetadata.b;
+        }
+        // DevbinV0Fixed records have no sampleLen prefix, so the stride must
+        // be inferred. Cog v1.9.5 light metadata reports the direct-sensor
+        // payload size doubled, but the legacy raw record contains one fixed
+        // payload matching the attribute schema.
         if ((attrPayloadLen > 0) && (pollRespMetadata.b > 0) && (attrPayloadLen <= pollRespMetadata.b)) {
             return attrPayloadLen;
         }
