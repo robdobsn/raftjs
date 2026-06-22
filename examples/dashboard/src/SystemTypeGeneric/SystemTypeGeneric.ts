@@ -88,7 +88,11 @@ export default class SystemTypeGeneric implements RaftSystemType {
             this._stateInfo.handleBinaryPayload(payload);
             handledByDeviceManager = true;
           }
-        } else if (SUBSCRIBE_BINARY_MSGS) {
+        } else if (SUBSCRIBE_BINARY_MSGS && !this.looksLikeCameraFrame(payload, frameMeta.binaryPayloadOffset)) {
+          // Non-enveloped binary is treated as legacy devbin device data, but
+          // the Camera topic also publishes non-enveloped binary frames. Skip
+          // those here so they aren't mis-parsed as device records (they are
+          // delivered to panels via the "pub" event below).
           this._stateInfo.handleBinaryPayload(payload);
           handledByDeviceManager = true;
         }
@@ -119,6 +123,21 @@ export default class SystemTypeGeneric implements RaftSystemType {
           });
       }
     };
+
+    // Detect a RaftCamera publish frame so it isn't mis-parsed as legacy
+    // (non-enveloped) devbin device data. Camera frames have a 19-byte
+    // self-describing header starting with version byte 0x01, immediately
+    // followed by the JPEG SOI marker (0xFF 0xD8). The combination is a
+    // strong, low-false-positive discriminator against device records.
+    private looksLikeCameraFrame(payload: Uint8Array, payloadOffset?: number): boolean {
+      if (payloadOffset === undefined) return false;
+      const CAMERA_HEADER_LEN = 19;
+      const jpegStart = payloadOffset + CAMERA_HEADER_LEN;
+      if (payload.length < jpegStart + 2) return false;
+      return payload[payloadOffset] === 0x01 &&
+        payload[jpegStart] === 0xFF &&
+        payload[jpegStart + 1] === 0xD8;
+    }
 
     // Get device manager
     deviceMgrIF = this._deviceManager;

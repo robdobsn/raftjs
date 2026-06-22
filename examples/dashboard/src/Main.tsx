@@ -14,6 +14,7 @@ import CommandPanel from './CommandPanel';
 import LoggingPanel from './LoggingPanel';
 import LogFilesPanel from './LogFilesPanel';
 import LogConfigPanel, { LogConfig } from './LogConfigPanel';
+import CameraPanel from './CameraPanel';
 
 import LatencyTestPanel from './LatencyTestPanel';
 import SettingsManager from './SettingsManager';
@@ -46,6 +47,11 @@ export default function Main() {
   // (which doesn't implement the `datalog` endpoint) doesn't get spammed with
   // unanswered `datalog?action=status` polls every 2 seconds.
   const [datalogSupported, setDatalogSupported] = useState<boolean | null>(null);
+
+  // null = probe not completed yet; true/false = result of capability probe.
+  // The Camera panel is only rendered when the firmware reports a working
+  // camera, so devices without the RaftCamera module aren't polled.
+  const [cameraSupported, setCameraSupported] = useState<boolean | null>(null);
 
   const [serialNo, setSerialNo] = useState<string>('');
 
@@ -169,6 +175,31 @@ export default function Main() {
     return () => { cancelled = true; };
   }, [connectionStatus]);
 
+  // Probe firmware camera capability once per connection. Devices without the
+  // RaftCamera module won't implement `camera?action=status` (request times out
+  // -> { rslt: 'fail' }), so we hide the Camera panel unless the camera reports
+  // ready.
+  useEffect(() => {
+    if (connectionStatus !== RaftConnEvent.CONN_CONNECTED) {
+      setCameraSupported(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const resp = await connManager.getConnector().sendRICRESTMsg(
+          'camera?action=status', {}
+        );
+        if (cancelled) return;
+        const r = resp as any;
+        setCameraSupported(r?.rslt === 'ok');
+      } catch {
+        if (!cancelled) setCameraSupported(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [connectionStatus]);
+
   return (
     <div className="content-outer">
       {showSettings ? (
@@ -229,6 +260,7 @@ export default function Main() {
                       <LogFilesPanel refreshTrigger={fileRefreshTrigger} onDownloadActiveChange={setDownloadActive} />
                     </>
                   )}
+                  {cameraSupported && <CameraPanel />}
                 </div>
                 <DevicesPanel />
               </>

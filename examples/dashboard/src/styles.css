@@ -1171,3 +1171,191 @@ h1 {
     background: #444;
     cursor: not-allowed;
 }
+
+/* Camera panel */
+.camera-panel {
+    min-width: 260px;
+}
+
+.camera-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+}
+
+.camera-header h3 {
+    margin: 0;
+    flex: 1;
+}
+
+.camera-refresh-button {
+    background: #555;
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    padding: 4px 10px;
+    cursor: pointer;
+    font-size: 1.2em;
+    line-height: 1;
+}
+
+.camera-refresh-button:hover {
+    background: #666;
+}
+
+.camera-status {
+    width: 100%;
+    margin-top: 8px;
+}
+
+.camera-settings {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 10px;
+    margin-top: 10px;
+    width: 100%;
+}
+
+.camera-settings label,
+.camera-fps {
+    display: flex;
+    flex-direction: column;
+    font-size: 0.8em;
+    color: #aaa;
+    gap: 2px;
+}
+
+.camera-settings select,
+.camera-settings input,
+.camera-fps input {
+    background: #383838;
+    color: #fff;
+    border: 1px solid #555;
+    border-radius: 4px;
+    padding: 4px 6px;
+}
+
+.camera-settings input,
+.camera-fps input {
+    width: 70px;
+}
+
+.camera-controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 10px;
+    margin-top: 12px;
+    width: 100%;
+}
+
+.camera-image-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    margin-top: 12px;
+    width: 100%;
+}
+
+.camera-image {
+    max-width: 100%;
+    border-radius: 8px;
+    background: #000;
+}
+
+.camera-image-placeholder {
+    width: 100%;
+    min-height: 120px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #000;
+    border-radius: 8px;
+    color: #888;
+    font-size: 0.9em;
+}
+
+.camera-caption {
+    font-size: 0.75em;
+    color: #aaa;
+    text-align: center;
+    word-break: break-all;
+}
+
+.camera-gallery {
+    width: 100%;
+    margin-top: 14px;
+}
+
+.camera-gallery-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    font-weight: bold;
+    border-top: 1px solid #555;
+    padding-top: 10px;
+}
+
+.camera-gallery-empty {
+    color: #888;
+    font-size: 0.9em;
+    margin-top: 10px;
+}
+
+.camera-gallery-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-top: 10px;
+    width: 100%;
+    max-height: 240px;
+    overflow-y: auto;
+}
+
+.camera-gallery-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 8px;
+    background: #383838;
+    border-radius: 4px;
+    gap: 8px;
+}
+
+.camera-gallery-name {
+    font-size: 0.85em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+    min-width: 0;
+}
+
+.camera-gallery-size {
+    font-size: 0.75em;
+    color: #888;
+}
+
+.camera-gallery-actions {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+}
+
+.camera-gallery-button {
+    background: #555;
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    padding: 4px 8px;
+    cursor: pointer;
+    font-size: 0.85em;
+}
+
+.camera-gallery-button:hover {
+    background: #666;
+}

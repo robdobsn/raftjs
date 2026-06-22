@@ -29,6 +29,11 @@ export default class ConnManager {
   // Callback on connection event
   private _onConnectionEvent: RaftEventFn | null = null;
 
+  // Additional event listeners (e.g. panels observing publish events). These
+  // are dispatched alongside the primary connection event listener so multiple
+  // components can receive events without overwriting each other.
+  private _eventListeners: Set<RaftEventFn> = new Set();
+
   // Get instance
   public static getInstance(): ConnManager {
     if (!ConnManager._instance) {
@@ -40,6 +45,17 @@ export default class ConnManager {
   // Set connection event listener
   public setConnectionEventListener(listener: RaftEventFn) {
     this._onConnectionEvent = listener;
+  }
+
+  // Add an additional event listener (returns an unsubscribe function)
+  public addEventListener(listener: RaftEventFn): () => void {
+    this._eventListeners.add(listener);
+    return () => this._eventListeners.delete(listener);
+  }
+
+  // Remove an additional event listener
+  public removeEventListener(listener: RaftEventFn) {
+    this._eventListeners.delete(listener);
   }
 
   // Check if connected
@@ -87,6 +103,13 @@ export default class ConnManager {
       RaftLog.verbose(`ConnManager - event ${eventName}`);
       if (this._onConnectionEvent) {
         this._onConnectionEvent(evtType, eventEnum, eventName, eventData);
+      }
+      for (const listener of this._eventListeners) {
+        try {
+          listener(evtType, eventEnum, eventName, eventData);
+        } catch (e) {
+          RaftLog.warn(`ConnManager - event listener error ${e}`);
+        }
       }
     });
     await this._connector.initializeChannel(method);
