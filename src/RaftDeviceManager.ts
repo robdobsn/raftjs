@@ -942,10 +942,15 @@ export class DeviceManager implements RaftDeviceMgrIF{
             if (msgHandler) {
                 const msgRslt = await msgHandler.sendRICRESTURL<RaftDevTypeInfoResponse>(cmd);
                 if (msgRslt && msgRslt.rslt === "ok") {
+                    // A response without devinfo (e.g. a static device with no registered
+                    // type record resolved via the per-device endpoint) cannot be used to
+                    // decode attributes - treat it as not-found so callers fall back to
+                    // the bus/type-index lookup instead of caching an empty record.
+                    if (!msgRslt.devinfo) {
+                        return undefined;
+                    }
                     // Merge devinfo (type-level) with top-level per-instance overrides (name, role)
-                    const base: DeviceTypeInfo = msgRslt.devinfo
-                        ? { ...msgRslt.devinfo }
-                        : { name: "", desc: "", manu: "", type: "" };
+                    const base: DeviceTypeInfo = { ...msgRslt.devinfo };
                     if (msgRslt.name !== undefined) base.name = msgRslt.name;
                     if (msgRslt.role !== undefined) base.role = msgRslt.role;
                     this._cachedDeviceTypeRecs[cacheKey] = base;

@@ -14,6 +14,9 @@ import CommandPanel from './CommandPanel';
 import LoggingPanel from './LoggingPanel';
 import LogFilesPanel from './LogFilesPanel';
 import LogConfigPanel, { LogConfig } from './LogConfigPanel';
+import CameraPanel from './CameraPanel';
+import CameraFeedStore from './CameraFeedStore';
+import ImageFilesPanel from './ImageFilesPanel';
 
 import LatencyTestPanel from './LatencyTestPanel';
 import SettingsManager from './SettingsManager';
@@ -46,6 +49,10 @@ export default function Main() {
   // (which doesn't implement the `datalog` endpoint) doesn't get spammed with
   // unanswered `datalog?action=status` polls every 2 seconds.
   const [datalogSupported, setDatalogSupported] = useState<boolean | null>(null);
+  // null = probe not completed yet; true/false = result of camera capability
+  // probe. Camera panels are only rendered when this is true.
+  const [cameraSupported, setCameraSupported] = useState<boolean | null>(null);
+  const [imageRefreshTrigger, setImageRefreshTrigger] = useState(0);
 
   const [serialNo, setSerialNo] = useState<string>('');
 
@@ -78,6 +85,12 @@ export default function Main() {
         ) {
           setConnectionStatus(eventEnum);
           setConnectionTime(new Date());
+        }
+      } else if (eventType === 'pub') {
+        // Forward camera publish frames to the camera feed store
+        const d = data as { topicName?: string; payload?: Uint8Array } | null | undefined;
+        if (d && d.topicName === 'Camera' && d.payload) {
+          CameraFeedStore.getInstance().handlePublishFrame(d.payload);
         }
       }
     };
@@ -169,6 +182,31 @@ export default function Main() {
     return () => { cancelled = true; };
   }, [connectionStatus]);
 
+  // Probe firmware camera capability once per connection. Devices without the
+  // Camera SysMod (or with it disabled) return a non-'ok' result, and all
+  // camera UI is hidden.
+  useEffect(() => {
+    if (connectionStatus !== RaftConnEvent.CONN_CONNECTED) {
+      setCameraSupported(null);
+      CameraFeedStore.getInstance().clear();
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const resp = await connManager.getConnector().sendRICRESTMsg(
+          'camera?action=status', {}
+        );
+        if (cancelled) return;
+        const r = resp as any;
+        setCameraSupported(r?.rslt === 'ok' && (r?.ready ?? false));
+      } catch {
+        if (!cancelled) setCameraSupported(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [connectionStatus]);
+
   return (
     <div className="content-outer">
       {showSettings ? (
@@ -222,12 +260,23 @@ export default function Main() {
                   <StatusPanel />
                   {latencyTestEnabled && <LatencyTestPanel />}
                   <CommandPanel />
+                  {cameraSupported && (
+                    <CameraPanel onSnapshotTaken={() => setImageRefreshTrigger(n => n + 1)} />
+                  )}
                   {datalogSupported && (
                     <>
-                      <LogConfigPanel onConfigChanged={setLogConfig} disabled={false} />
-                      <LoggingPanel onLogStopped={() => setFileRefreshTrigger(n => n + 1)} pausePolling={downloadActive} logConfig={logConfig} />
+                      <LogConfigPanel onConfigChanged={setLogConfig} disabled={false} cameraAvailable={!!cameraSupported} />
+                      <LoggingPanel
+                        onLogStopped={() => { setFileRefreshTrigger(n => n + 1); setImageRefreshTrigger(n => n + 1); }}
+                        pausePolling={downloadActive}
+                        logConfig={logConfig}
+                        cameraAvailable={!!cameraSupported}
+                      />
                       <LogFilesPanel refreshTrigger={fileRefreshTrigger} onDownloadActiveChange={setDownloadActive} />
                     </>
+                  )}
+                  {cameraSupported && (
+                    <ImageFilesPanel refreshTrigger={imageRefreshTrigger} onDownloadActiveChange={setDownloadActive} />
                   )}
                 </div>
                 <DevicesPanel />

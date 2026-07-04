@@ -702,12 +702,14 @@ export default class RaftMsgHandler {
               if (!await this._msgSender.sendTxMsg(
                 this._msgTrackInfos[checkIdx].msgFrame,
                 this._msgTrackInfos[checkIdx].withResponse)) {
-                RaftLog.warn(`msgTrackTimer Message send failed msgNum ${checkIdx} ${RaftUtils.bufferToHex(this._msgTrackInfos[checkIdx].msgFrame)}`);
-                this._msgCompleted(checkIdx, RaftMsgResultCode.MESSAGE_RESULT_FAIL, null);
+                // Send failed (e.g. channel not currently connected) - leave the
+                // message outstanding so it is retried on a later pass; it will
+                // complete with TIMEOUT if all retries are exhausted
+                RaftLog.warn(`msgTrackTimer Message send failed msgNum ${checkIdx} attempt ${this._msgTrackInfos[checkIdx].retryCount}/${RaftMsgTrackInfo.MSG_RETRY_COUNT} - will retry ${RaftUtils.bufferToHex(this._msgTrackInfos[checkIdx].msgFrame)}`);
                 this._commsStats.recordMsgNoConnection();
               }
 
-              // Message sent ok so break here
+              // Message send attempted so break here
               break;
 
             } catch (error: unknown) {

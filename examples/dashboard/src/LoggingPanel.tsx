@@ -26,6 +26,17 @@ interface LogStatus {
   bytesPerSec: number;
 }
 
+interface CameraCaptureStatus {
+  active: boolean;
+  fs: string;
+  folder: string;
+  intervalMs: number;
+  images: number;
+  failures: number;
+  totalBytes: number;
+  lastFilename: string;
+}
+
 const emptyStatus: LogStatus = {
   isLogging: false,
   fileName: '',
@@ -43,15 +54,56 @@ interface LoggingPanelProps {
   onLogStopped?: () => void;
   pausePolling?: boolean;
   logConfig?: LogConfig | null;
+  cameraAvailable?: boolean;
 }
 
-export default function LoggingPanel({ onLogStopped, pausePolling, logConfig }: LoggingPanelProps) {
+export default function LoggingPanel({ onLogStopped, pausePolling, logConfig, cameraAvailable }: LoggingPanelProps) {
   const [status, setStatus] = useState<LogStatus>(emptyStatus);
+  const [cameraStatus, setCameraStatus] = useState<CameraCaptureStatus | null>(null);
   const [label, setLabel] = useState('');
   const [isBusy, setIsBusy] = useState(false);
   const [lastError, setLastError] = useState('');
+  const [cameraWarning, setCameraWarning] = useState('');
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const wasLoggingRef = useRef(false);
+  const cameraSessionRef = useRef(false);
+
+  // Stop the camera interval-capture session (best-effort)
+  const stopCameraCapture = async () => {
+    if (!cameraAvailable) return;
+    try {
+      await connManager.getConnector().sendRICRESTMsg('camera?action=stop', {});
+    } catch (e) {
+      console.warn('Failed to stop camera capture', e);
+    }
+    cameraSessionRef.current = false;
+  };
+
+  const fetchCameraStatus = async () => {
+    if (!cameraAvailable || !connManager.getConnector().isConnected()) return null;
+    try {
+      const resp = await connManager.getConnector().sendRICRESTMsg('camera?action=status', {});
+      const r = resp as any;
+      if (r?.rslt === 'ok' && r.capture) {
+        const cap = r.capture;
+        const capStatus: CameraCaptureStatus = {
+          active: cap.active ?? false,
+          fs: cap.fs ?? '',
+          folder: cap.folder ?? '',
+          intervalMs: cap.intervalMs ?? 0,
+          images: cap.images ?? 0,
+          failures: cap.failures ?? 0,
+          totalBytes: cap.totalBytes ?? 0,
+          lastFilename: cap.lastFilename ?? '',
+        };
+        setCameraStatus(capStatus);
+        return capStatus;
+      }
+    } catch (e) {
+      console.warn('Failed to fetch camera status', e);
+    }
+    return null;
+  };
 
   const fetchStatus = async () => {
     if (!connManager.getConnector().isConnected()) return;
@@ -77,12 +129,22 @@ export default function LoggingPanel({ onLogStopped, pausePolling, logConfig }: 
         });
         // Detect timed logging session that finished on its own
         if (wasLoggingRef.current && !nowLogging) {
+          // Also stop a camera capture session started alongside logging
+          if (cameraSessionRef.current) {
+            stopCameraCapture();
+          }
           onLogStopped?.();
         }
         wasLoggingRef.current = nowLogging;
       }
     } catch (e) {
       console.warn('Failed to fetch logging status', e);
+    }
+
+    // Poll the camera capture session state (also re-syncs with a session
+    // still running on the device after a reconnect)
+    if (cameraAvailable) {
+      await fetchCameraStatus();
     }
   };
 
@@ -103,11 +165,16 @@ export default function LoggingPanel({ onLogStopped, pausePolling, logConfig }: 
   const handleStart = async () => {
     setIsBusy(true);
     setLastError('');
+    setCameraWarning('');
     try {
       const labelParam = label.trim() ? `&label=${encodeQueryValue(label.trim())}` : '';
       let configParam = '';
+      // Strip the dashboard-side camera settings from the config sent to the
+      // datalog endpoint (they drive camera?action=start below)
+      const cameraConfig = logConfig?.camera;
       if (logConfig && logConfig.devices.length > 0) {
-        configParam = `&config=${encodeQueryValue(JSON.stringify(logConfig))}`;
+        const { camera: _camera, ...datalogConfig } = logConfig;
+        configParam = `&config=${encodeQueryValue(JSON.stringify(datalogConfig))}`;
       }
       // Include current UTC time so firmware can timestamp the log even without NTP
       const utcParam = `&UTC=${encodeQueryValue(new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'))}`;
@@ -119,6 +186,40 @@ export default function LoggingPanel({ onLogStopped, pausePolling, logConfig }: 
       const r = resp as any;
       if (r?.rslt !== 'ok') {
         setLastError(r?.error || 'Start failed');
+      } else if (cameraAvailable && cameraConfig?.enabled) {
+        // Start the camera interval-capture session alongside logging.
+        // Images go to a per-session folder named after the label (or timestamp).
+        const sessionName = (label.trim() ? label.trim() : `log-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '')}`)
+          .replace(/[^A-Za-z0-9_-]/g, '_');
+        const folder = `/images/${sessionName}`;
+        // Bound the session so images stop if the timed log ends while disconnected
+        const maxImages = (logConfig && logConfig.durationMs > 0 && cameraConfig.intervalMs > 0)
+          ? Math.ceil(logConfig.durationMs / cameraConfig.intervalMs) + 1
+          : 0;
+        const camParams = [
+          `fs=${cameraConfig.fs}`,
+          `folder=${encodeQueryValue(folder)}`,
+          `intervalMs=${cameraConfig.intervalMs}`,
+          `maxImages=${maxImages}`,
+        ];
+        if (cameraConfig.size) camParams.push(`size=${cameraConfig.size}`);
+        if (cameraConfig.quality !== undefined) camParams.push(`quality=${cameraConfig.quality}`);
+        try {
+          // Starting a session with a new frame size can trigger a full camera
+          // re-init on the device (several seconds) so use a long timeout
+          const camResp = await connManager.getConnector().sendRICRESTMsg(
+            `camera?action=start&${camParams.join('&')}`, {}, undefined, 15000
+          );
+          const cr = camResp as any;
+          if (cr?.rslt === 'ok') {
+            cameraSessionRef.current = true;
+          } else {
+            setCameraWarning('Logging started but image capture failed to start');
+          }
+        } catch (e) {
+          setCameraWarning('Logging started but image capture failed to start');
+        }
+        await fetchCameraStatus();
       }
       await fetchStatus();
     } catch (e) {
@@ -137,6 +238,11 @@ export default function LoggingPanel({ onLogStopped, pausePolling, logConfig }: 
       const r = resp as any;
       if (r?.rslt !== 'ok') {
         setLastError(r?.error || 'Stop failed');
+      }
+      // Stop any camera capture session (started here or still running on the device)
+      if (cameraAvailable && (cameraSessionRef.current || cameraStatus?.active)) {
+        await stopCameraCapture();
+        await fetchCameraStatus();
       }
       await fetchStatus();
       onLogStopped?.();
@@ -216,6 +322,24 @@ export default function LoggingPanel({ onLogStopped, pausePolling, logConfig }: 
                 <div className="info-value">{formatBytes(status.bytesPerSec)}/s</div>
               </div>
             )}
+            {cameraStatus?.active && (
+              <>
+                <div className="info-line">
+                  <div className="info-label">Images:</div>
+                  <div className="info-value">
+                    {cameraStatus.images} ({formatBytes(cameraStatus.totalBytes)}
+                    {cameraStatus.failures > 0 ? `, ${cameraStatus.failures} failed` : ''})
+                    {' '}→ {cameraStatus.fs}{cameraStatus.folder}
+                  </div>
+                </div>
+                {cameraStatus.lastFilename && (
+                  <div className="info-line">
+                    <div className="info-label">Last image:</div>
+                    <div className="info-value">{cameraStatus.lastFilename}</div>
+                  </div>
+                )}
+              </>
+            )}
           </div>
           <button
             className="action-button logging-stop-button"
@@ -254,6 +378,10 @@ export default function LoggingPanel({ onLogStopped, pausePolling, logConfig }: 
             </div>
           </div>
         </>
+      )}
+
+      {cameraWarning && (
+        <div className="logging-warning">{cameraWarning}</div>
       )}
 
       {lastError && (

@@ -44,6 +44,14 @@ function formatDurationLabel(ms: number): string {
   return `${(ms / 86400000).toFixed(1)} days`;
 }
 
+export interface CameraLogConfig {
+  enabled: boolean;
+  intervalMs: number;   // capture interval in ms
+  fs: string;           // 'local' or 'sd'
+  size?: string;        // frame size name (undefined = device current)
+  quality?: number;     // JPEG quality 0-63 (undefined = device current)
+}
+
 export interface LogConfig {
   format: string;       // "csv" or "jsonl"
   csvHeader?: boolean;  // include metadata comment block in CSV
@@ -54,20 +62,45 @@ export interface LogConfig {
     rateMs: number;
     attrs?: string[];
   }>;
+  // Camera image capture settings (dashboard-side only - stripped from the
+  // config sent to the datalog endpoint and used for camera?action=start)
+  camera?: CameraLogConfig;
 }
+
+// Image capture interval presets
+const IMAGE_INTERVAL_PRESETS = [
+  { label: '10 sec', ms: 10000 },
+  { label: '30 sec', ms: 30000 },
+  { label: '1 min', ms: 60000 },
+  { label: '5 min', ms: 300000 },
+  { label: '15 min', ms: 900000 },
+  { label: '1 hour', ms: 3600000 },
+];
+
+// Frame size names supported by the RaftCamera driver
+const CAMERA_FRAME_SIZES = [
+  '96X96', 'QQVGA', 'QCIF', 'HQVGA', '240X240', 'QVGA', 'CIF', 'HVGA',
+  'VGA', 'SVGA', 'XGA', 'HD', 'SXGA', 'UXGA',
+];
 
 interface LogConfigPanelProps {
   onConfigChanged?: (config: LogConfig | null) => void;
   disabled?: boolean;
+  cameraAvailable?: boolean;
 }
 
-export default function LogConfigPanel({ onConfigChanged, disabled }: LogConfigPanelProps) {
+export default function LogConfigPanel({ onConfigChanged, disabled, cameraAvailable }: LogConfigPanelProps) {
   const [deviceEntries, setDeviceEntries] = useState<DeviceLogEntry[]>([]);
   const [lastUpdated, setLastUpdated] = useState(0);
   const [format, setFormat] = useState<'csv' | 'jsonl'>('csv');
   const [csvHeader, setCsvHeader] = useState(true);
   const [durationMs, setDurationMs] = useState(600000); // 10 minutes default
   const [fsFreeBytes, setFsFreeBytes] = useState<number | null>(null);
+  const [camEnabled, setCamEnabled] = useState(true);
+  const [camIntervalMs, setCamIntervalMs] = useState(60000);
+  const [camFs, setCamFs] = useState('sd');
+  const [camSize, setCamSize] = useState('');
+  const [camQuality, setCamQuality] = useState('');
 
   // Fetch filesystem info from device
   const fetchFsInfo = async () => {
@@ -214,8 +247,17 @@ export default function LogConfigPanel({ onConfigChanged, disabled }: LogConfigP
         return entry;
       }),
     };
+    if (cameraAvailable) {
+      config.camera = {
+        enabled: camEnabled,
+        intervalMs: camIntervalMs,
+        fs: camFs,
+        size: camSize || undefined,
+        quality: camQuality !== '' ? parseInt(camQuality, 10) : undefined,
+      };
+    }
     onConfigChanged?.(config);
-  }, [deviceEntries, format, csvHeader, durationMs]);
+  }, [deviceEntries, format, csvHeader, durationMs, cameraAvailable, camEnabled, camIntervalMs, camFs, camSize, camQuality]);
 
   const [showDeviceDialog, setShowDeviceDialog] = useState(false);
 
@@ -343,6 +385,72 @@ export default function LogConfigPanel({ onConfigChanged, disabled }: LogConfigP
           ))}
         </div>
       </div>
+
+      {cameraAvailable && (
+        <div className="log-config-camera-section">
+          <label className="log-config-csv-header-label">
+            <input
+              type="checkbox"
+              checked={camEnabled}
+              onChange={e => setCamEnabled(e.target.checked)}
+              disabled={disabled}
+            />
+            Capture images during logging
+          </label>
+          {camEnabled && (
+            <>
+              <div className="log-config-format-row">
+                <label className="log-config-rate-label">Every:</label>
+                <select
+                  className="log-config-mode-select"
+                  value={camIntervalMs}
+                  onChange={e => setCamIntervalMs(parseInt(e.target.value, 10))}
+                  disabled={disabled}
+                >
+                  {IMAGE_INTERVAL_PRESETS.map(p => (
+                    <option key={p.ms} value={p.ms}>{p.label}</option>
+                  ))}
+                </select>
+                <label className="log-config-rate-label">To:</label>
+                <select
+                  className="log-config-mode-select"
+                  value={camFs}
+                  onChange={e => setCamFs(e.target.value)}
+                  disabled={disabled}
+                >
+                  <option value="sd">SD card</option>
+                  <option value="local">Local (LittleFS)</option>
+                </select>
+              </div>
+              <div className="log-config-format-row">
+                <label className="log-config-rate-label">Size:</label>
+                <select
+                  className="log-config-mode-select"
+                  value={camSize}
+                  onChange={e => setCamSize(e.target.value)}
+                  disabled={disabled}
+                >
+                  <option value="">Device default</option>
+                  {CAMERA_FRAME_SIZES.map(s => (
+                    <option key={s} value={s}>{s}</option>
+                  ))}
+                </select>
+                <label className="log-config-rate-label">Quality:</label>
+                <input
+                  className="log-config-quality-input"
+                  type="number"
+                  min="0"
+                  max="63"
+                  placeholder="default"
+                  value={camQuality}
+                  onChange={e => setCamQuality(e.target.value)}
+                  disabled={disabled}
+                />
+              </div>
+            </>
+          )}
+        </div>
+      )}
 
       {showDeviceDialog && (
         <DeviceSelectDialog

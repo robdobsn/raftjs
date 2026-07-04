@@ -1171,3 +1171,155 @@ h1 {
     background: #444;
     cursor: not-allowed;
 }
+
+/* Warning (non-fatal) message - e.g. camera capture failed but logging is running */
+.logging-warning {
+    margin-top: 8px;
+    padding: 6px 10px;
+    background: #553;
+    border-radius: 4px;
+    color: #fda;
+    font-size: 0.85em;
+}
+
+/* Camera Panel */
+.camera-panel {
+    min-width: 280px;
+    max-width: 400px;
+    align-items: stretch;
+}
+
+.camera-panel-note {
+    color: #aaa;
+    font-size: 0.85em;
+    margin: 6px 0;
+    word-break: break-all;
+}
+
+.camera-controls-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 6px 0;
+    flex-wrap: wrap;
+}
+
+.camera-live-active {
+    background-color: #c33;
+}
+
+.camera-live-active:hover {
+    background-color: #e44;
+}
+
+.camera-rate-label {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.85em;
+    color: #ccc;
+}
+
+.camera-select {
+    background: #333;
+    color: #eee;
+    border: 1px solid #555;
+    border-radius: 4px;
+    padding: 3px 6px;
+    font-size: 0.85em;
+}
+
+.camera-quality-input,
+.log-config-quality-input {
+    width: 60px;
+    background: #333;
+    color: #eee;
+    border: 1px solid #555;
+    border-radius: 4px;
+    padding: 3px 6px;
+    font-size: 0.85em;
+}
+
+.camera-live-view {
+    margin: 8px 0;
+}
+
+.camera-live-img {
+    width: 100%;
+    max-width: 380px;
+    border-radius: 4px;
+    display: block;
+}
+
+.camera-live-waiting {
+    color: #888;
+    font-style: italic;
+    padding: 20px 0;
+    text-align: center;
+}
+
+.camera-frame-meta {
+    font-size: 0.8em;
+    color: #aaa;
+    margin-top: 4px;
+}
+
+.camera-info-line {
+    font-size: 0.8em;
+    color: #aaa;
+    margin-top: 6px;
+    word-break: break-all;
+}
+
+/* Camera section in Log Config Panel */
+.log-config-camera-section {
+    margin-top: 10px;
+    padding-top: 8px;
+    border-top: 1px solid #444;
+}
+
+/* Image Files Panel */
+.image-files-breadcrumb {
+    font-size: 0.85em;
+    color: #aaa;
+    margin: 4px 0 8px 0;
+    word-break: break-all;
+}
+
+.image-files-crumb {
+    color: #8bf;
+    cursor: pointer;
+}
+
+.image-files-crumb:hover {
+    text-decoration: underline;
+}
+
+.image-files-folder {
+    cursor: pointer;
+}
+
+.image-files-folder:hover {
+    background: #3a3a3a;
+}
+
+.image-preview {
+    margin-top: 10px;
+    border-top: 1px solid #444;
+    padding-top: 8px;
+}
+
+.image-preview-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 6px;
+}
+
+.image-preview-img {
+    width: 100%;
+    max-width: 380px;
+    border-radius: 4px;
+    display: block;
+}

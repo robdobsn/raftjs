@@ -1,5 +1,5 @@
 import { RaftSubscribeForUpdatesCBType, RaftSystemType } from "../../../../src/RaftSystemType";
-import { inspectPublishFrame, RaftEventFn, RaftLog, RaftPublishEvent, RaftPublishEventNames, RaftSubscriptionUpdateResponse, RaftSystemUtils } from "../../../../src/main";
+import { inspectPublishFrame, decodeCameraFramePublishMsg, RaftEventFn, RaftLog, RaftPublishEvent, RaftPublishEventNames, RaftSubscriptionUpdateResponse, RaftSystemUtils } from "../../../../src/main";
 import { StateInfoGeneric } from "./StateInfoGeneric";
 import { DeviceManager } from "../../../../src/RaftDeviceManager";
 
@@ -81,6 +81,7 @@ export default class SystemTypeGeneric implements RaftSystemType {
 
       const frameMeta = inspectPublishFrame(payload, (idx) => this._systemUtils?.getPublishTopicName(idx));
       let handledByDeviceManager = false;
+      let topicNameForEvent = frameMeta.topicName;
 
       if (frameMeta.frameType === "binary") {
         if (frameMeta.binaryHasEnvelope) {
@@ -89,8 +90,18 @@ export default class SystemTypeGeneric implements RaftSystemType {
             handledByDeviceManager = true;
           }
         } else if (SUBSCRIBE_BINARY_MSGS) {
-          this._stateInfo.handleBinaryPayload(payload);
-          handledByDeviceManager = true;
+          // Legacy path - no publish envelope, so the topic cannot be identified
+          // from the frame. Older camera firmware publishes camera frames without
+          // the envelope; sniff those out (valid camera header + JPEG SOI marker)
+          // so they are not misparsed as devbin device records.
+          const camFrame = decodeCameraFramePublishMsg(payload);
+          if (camFrame && camFrame.jpegData.length >= 2 &&
+              camFrame.jpegData[0] === 0xFF && camFrame.jpegData[1] === 0xD8) {
+            topicNameForEvent = "Camera";
+          } else {
+            this._stateInfo.handleBinaryPayload(payload);
+            handledByDeviceManager = true;
+          }
         }
       } else if (frameMeta.frameType === "json") {
         if (frameMeta.topicName === "devjson" || frameMeta.topicName === undefined) {
@@ -108,7 +119,7 @@ export default class SystemTypeGeneric implements RaftSystemType {
         this._onEvent("pub", RaftPublishEvent.PUBLISH_EVENT_DATA, RaftPublishEventNames[RaftPublishEvent.PUBLISH_EVENT_DATA],
           {
             topicIDs: topicIDs,
-            topicName: frameMeta.topicName,
+            topicName: topicNameForEvent,
             topicIndex: frameMeta.topicIndex,
             topicVersion: frameMeta.version,
             frameType: frameMeta.frameType,

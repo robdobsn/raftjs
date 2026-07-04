@@ -467,12 +467,14 @@ export default class RaftConnector {
    *
    */
   async sendRICRESTMsg(commandName: string, params: object,
-    bridgeID: number | undefined = undefined): Promise<RaftOKFail> {
-    return this._sendRICRESTMsg(commandName, params, bridgeID);
+    bridgeID: number | undefined = undefined,
+    msgTimeoutMs: number | undefined = undefined): Promise<RaftOKFail> {
+    return this._sendRICRESTMsg(commandName, params, bridgeID, msgTimeoutMs);
   }
 
   private async _sendRICRESTMsg(commandName: string, params: object,
-    bridgeID: number | undefined = undefined): Promise<RaftOKFail> {
+    bridgeID: number | undefined = undefined,
+    msgTimeoutMs: number | undefined = undefined): Promise<RaftOKFail> {
     try {
       // Format the paramList as query string
       const paramEntries = Object.entries(params);
@@ -483,7 +485,7 @@ export default class RaftConnector {
       }
       // Format the url to send
       if (paramQueryStr.length > 0) commandName += '?' + paramQueryStr;
-      const response = await this._raftMsgHandler.sendRICRESTURL<RaftOKFail | null>(commandName, bridgeID);
+      const response = await this._raftMsgHandler.sendRICRESTURL<RaftOKFail | null>(commandName, bridgeID, msgTimeoutMs);
       return response ?? { rslt: 'fail' };
     } catch (error) {
       RaftLog.warn(`sendRICRESTMsg failed ${error}`);
