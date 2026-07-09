@@ -46,7 +46,9 @@ export function isAttrTypeSigned(attrType: string): boolean {
 
 export function decodeAttrUnitsEncoding(unitsEncoding: string): string {
     // Replace instances of HTML encoded chars like &deg; with the actual char
-    return unitsEncoding.replace(/&deg;/g, "°");
+    return unitsEncoding
+        .replace(/&deg;/g, "°")
+        .replace(/&micro;/g, "µ");
 }
 
 export interface LUTRow {

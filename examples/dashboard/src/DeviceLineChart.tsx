@@ -52,9 +52,10 @@ const DeviceLineChart: React.FC<DeviceLineChartProps> = memo(({ deviceKey, lastU
     const options = {
         responsive: true,
         maintainAspectRatio: false,
-        animation: {
-            duration: 1, // default is 1000ms
-        },
+        // Animation disabled: with live-updating data, Chart.js animations schedule continuous
+        // requestAnimationFrame canvas redraws (even at duration 1) that surface as long
+        // scheduler tasks. Updates are already paced by the panel's ~500ms chart timer.
+        animation: false as const,
         scales: chartScales
     };
 

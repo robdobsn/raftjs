@@ -36,12 +36,22 @@ const DevicePanel = ({ deviceKey, lastUpdated }: DevicePanelProps) => {
     );
     
     useEffect(() => {
-        const startTime = Date.now();
         const updateChart = () => {
             setTimedChartUpdate(Date.now());
         };
-        const updateTimer = setInterval(updateChart, 500);
-        return () => clearInterval(updateTimer);
+        // Stagger the start with a random phase so that multiple device panels do not all refresh
+        // their charts on the same 500ms boundary (which produces large synchronized render bursts
+        // that show up as long scheduler tasks). Each panel keeps a 500ms period but a different phase.
+        const initialDelayMs = Math.random() * 500;
+        let updateTimer: ReturnType<typeof setInterval> | null = null;
+        const startTimer = setTimeout(() => {
+            updateChart();
+            updateTimer = setInterval(updateChart, 500);
+        }, initialDelayMs);
+        return () => {
+            clearTimeout(startTimer);
+            if (updateTimer) clearInterval(updateTimer);
+        };
     }, []);
 
     useEffect(() => {
