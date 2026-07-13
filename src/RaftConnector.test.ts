@@ -23,6 +23,14 @@ function makeChannel(connect: () => Promise<boolean>): RaftChannel {
   } as unknown as RaftChannel;
 }
 
+function makeDisconnectChannel(): RaftChannel {
+  return {
+    disconnect: jest.fn(async () => undefined),
+    requiresSubscription: jest.fn(() => false),
+    ricRestCmdBeforeDisconnect: jest.fn(() => null),
+  } as unknown as RaftChannel;
+}
+
 function configureRetry(connector: RaftConnector, channel: RaftChannel, retryForMs: number): void {
   const connectorState = connector as unknown as {
     _raftChannel: RaftChannel;
@@ -100,6 +108,55 @@ describe("RaftConnector reconnect deadline", () => {
     expect(channel.disconnect).not.toHaveBeenCalled();
     expect(connector.isConnected()).toBe(true);
   });
+
+  it("emits disconnected exactly once when retry is disabled mid-window", async () => {
+    const pendingConnect = deferred<boolean>();
+    const channel = makeChannel(() => pendingConnect.promise);
+    const connector = new RaftConnector();
+    const onEvent = jest.fn();
+    connector.setEventListener(onEvent);
+    configureRetry(connector, channel, 100);
+    channel.disconnect = jest.fn(() => {
+      connector.onConnEvent(RaftConnEvent.CONN_DISCONNECTED);
+      return Promise.resolve();
+    });
+
+    connector.onConnEvent(RaftConnEvent.CONN_DISCONNECTED);
+    await jest.advanceTimersByTimeAsync(10);
+    expect(channel.connect).toHaveBeenCalledTimes(1);
+
+    connector.setRetryConnectionIfLost(false, 100);
+
+    expect(onEvent.mock.calls.filter(([, event]) =>
+      event === RaftConnEvent.CONN_DISCONNECTED
+    )).toHaveLength(1);
+    expect(connector.isConnected()).toBe(false);
+    expect(channel.disconnect).toHaveBeenCalledTimes(1);
+
+    connector.setRetryConnectionIfLost(false, 100);
+    expect(onEvent.mock.calls.filter(([, event]) =>
+      event === RaftConnEvent.CONN_DISCONNECTED
+    )).toHaveLength(1);
+    expect(channel.disconnect).toHaveBeenCalledTimes(1);
+
+    await jest.advanceTimersByTimeAsync(100);
+    expect(channel.disconnect).toHaveBeenCalledTimes(1);
+
+    pendingConnect.resolve(true);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(onEvent.mock.calls.filter(([, event]) =>
+      event === RaftConnEvent.CONN_DISCONNECTED
+    )).toHaveLength(1);
+    expect(channel.disconnect).toHaveBeenCalledTimes(2);
+
+    connector.onConnEvent(RaftConnEvent.CONN_CONNECTED);
+    connector.onConnEvent(RaftConnEvent.CONN_DISCONNECTED);
+    expect(onEvent.mock.calls.filter(([, event]) =>
+      event === RaftConnEvent.CONN_DISCONNECTED
+    )).toHaveLength(2);
+  });
 });
 
 describe("RaftConnector terminal disconnect", () => {
@@ -111,23 +168,45 @@ describe("RaftConnector terminal disconnect", () => {
     jest.useRealTimers();
   });
 
-  it("lets page unload force down a channel in the normal disconnect grace period", async () => {
-    const channel = {
-      disconnect: jest.fn(async () => undefined),
-      requiresSubscription: jest.fn(() => false),
-      ricRestCmdBeforeDisconnect: jest.fn(() => null),
-    } as unknown as RaftChannel;
+  it("disconnects both the active channel and a channel in the normal disconnect grace period", async () => {
+    const disconnectingChannel = makeDisconnectChannel();
+    const activeChannel = makeDisconnectChannel();
     const connector = new RaftConnector();
-    (connector as unknown as { _raftChannel: RaftChannel })._raftChannel = channel;
+    const connectorState = connector as unknown as { _raftChannel: RaftChannel };
+    connectorState._raftChannel = disconnectingChannel;
 
     const normalDisconnect = connector.disconnect();
-    expect(channel.disconnect).not.toHaveBeenCalled();
+    connectorState._raftChannel = activeChannel;
+    expect(disconnectingChannel.disconnect).not.toHaveBeenCalled();
 
     connector.disconnectForPageUnload();
-    expect(channel.disconnect).toHaveBeenCalledTimes(1);
+    expect(disconnectingChannel.disconnect).toHaveBeenCalledTimes(1);
+    expect(activeChannel.disconnect).toHaveBeenCalledTimes(1);
 
     await jest.advanceTimersByTimeAsync(1000);
     await normalDisconnect;
-    expect(channel.disconnect).toHaveBeenCalledTimes(2);
+    expect(disconnectingChannel.disconnect).toHaveBeenCalledTimes(2);
+    expect(activeChannel.disconnect).toHaveBeenCalledTimes(1);
+  });
+
+  it("disconnects every channel in overlapping normal disconnect grace periods", async () => {
+    const firstChannel = makeDisconnectChannel();
+    const secondChannel = makeDisconnectChannel();
+    const connector = new RaftConnector();
+    const connectorState = connector as unknown as { _raftChannel: RaftChannel };
+
+    connectorState._raftChannel = firstChannel;
+    const firstDisconnect = connector.disconnect();
+    connectorState._raftChannel = secondChannel;
+    const secondDisconnect = connector.disconnect();
+
+    connector.disconnectForPageUnload();
+    expect(firstChannel.disconnect).toHaveBeenCalledTimes(1);
+    expect(secondChannel.disconnect).toHaveBeenCalledTimes(1);
+
+    await jest.advanceTimersByTimeAsync(1000);
+    await Promise.all([firstDisconnect, secondDisconnect]);
+    expect(firstChannel.disconnect).toHaveBeenCalledTimes(2);
+    expect(secondChannel.disconnect).toHaveBeenCalledTimes(2);
   });
 });

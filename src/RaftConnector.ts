@@ -53,7 +53,7 @@ export default class RaftConnector {
 
   // Channel
   private _raftChannel: RaftChannel | null = null;
-  private _disconnectingChannel: RaftChannel | null = null;
+  private _disconnectingChannels = new Set<RaftChannel>();
 
   // Channel connection method and locator
   private _channelConnMethod = "";
@@ -82,6 +82,7 @@ export default class RaftConnector {
   private _retryIfLostDisconnectTime: number | null = null;
   private readonly _retryIfLostRetryDelayMs = 500;
   private _retryIfLostGeneration = 0;
+  private _terminalDisconnectNotified = false;
 
   // File handler
   private _raftFileHandler: RaftFileHandler = new RaftFileHandler(
@@ -164,9 +165,16 @@ export default class RaftConnector {
     this._retryIfLostEnabled = enableRetry;
     this._retryIfLostForSecs = retryForSecs;
     if (!this._retryIfLostEnabled) {
-      this._retryIfLostIsConnected = false;
-      this._retryIfLostDisconnectTime = null;
-      this._retryIfLostGeneration++;
+      if (this._retryIfLostDisconnectTime !== null) {
+        const retryChannel = this._raftChannel;
+        this._finishRetryConnection(this._retryIfLostGeneration);
+        if (retryChannel) {
+          this._disconnectRetryChannel(retryChannel);
+        }
+      } else {
+        this._retryIfLostIsConnected = false;
+        this._retryIfLostGeneration++;
+      }
     }
     RaftLog.debug(`setRetryConnectionIfLost ${enableRetry} retry for ${retryForSecs}`);
   }
@@ -413,7 +421,7 @@ export default class RaftConnector {
       // Store reference to channel before async operations to avoid race condition
       const channelToDisconnect = this._raftChannel;
       this._raftChannel = null;
-      this._disconnectingChannel = channelToDisconnect;
+      this._disconnectingChannels.add(channelToDisconnect);
 
       try {
         // If the channel uses publish subscriptions, send an explicit unsubscribe
@@ -445,9 +453,7 @@ export default class RaftConnector {
         try {
           await channelToDisconnect.disconnect();
         } finally {
-          if (this._disconnectingChannel === channelToDisconnect) {
-            this._disconnectingChannel = null;
-          }
+          this._disconnectingChannels.delete(channelToDisconnect);
         }
       }
     }
@@ -464,22 +470,21 @@ export default class RaftConnector {
     this._retryIfLostDisconnectTime = null;
     this._retryIfLostGeneration++;
 
-    const channelToDisconnect = this._raftChannel ?? this._disconnectingChannel;
-    if (!channelToDisconnect) {
-      return;
-    }
-
-    if (this._raftChannel === channelToDisconnect) {
+    const channelsToDisconnect = new Set(this._disconnectingChannels);
+    if (this._raftChannel) {
+      channelsToDisconnect.add(this._raftChannel);
       this._raftChannel = null;
     }
 
-    try {
-      void channelToDisconnect.disconnect().catch(error => {
+    channelsToDisconnect.forEach(channel => {
+      try {
+        void channel.disconnect().catch(error => {
+          RaftLog.warn(`RaftConnector.disconnectForPageUnload failed ${error}`);
+        });
+      } catch (error) {
         RaftLog.warn(`RaftConnector.disconnectForPageUnload failed ${error}`);
-      });
-    } catch (error) {
-      RaftLog.warn(`RaftConnector.disconnectForPageUnload failed ${error}`);
-    }
+      }
+    });
   }
 
   // Mark: Tx Message handling -----------------------------------------------------------------------------------------
@@ -828,6 +833,10 @@ export default class RaftConnector {
   onConnEvent(eventEnum: RaftConnEvent, data: object | string | null | undefined = undefined): void {
     // Handle information clearing on disconnect
     switch (eventEnum) {
+      case RaftConnEvent.CONN_CONNECTED:
+        this._terminalDisconnectNotified = false;
+        break;
+
       case RaftConnEvent.CONN_DISCONNECTED:
 
         // Check if retry required
@@ -852,6 +861,10 @@ export default class RaftConnector {
 
         }
 
+        if (this._terminalDisconnectNotified) {
+          return;
+        }
+        this._terminalDisconnectNotified = true;
         this._retryIfLostDisconnectTime = null;
 
         // Invalidate connection details
@@ -925,6 +938,12 @@ export default class RaftConnector {
       if (retryGeneration !== this._retryIfLostGeneration) {
         if (attemptResult.connected && channelForAttempt) {
           this._disconnectRetryChannel(channelForAttempt);
+        } else if (attemptResult.timedOut && channelForAttempt) {
+          void connectPromise.then(connected => {
+            if (connected) {
+              this._disconnectRetryChannel(channelForAttempt);
+            }
+          });
         }
         return;
       }
@@ -973,6 +992,11 @@ export default class RaftConnector {
     this._retryIfLostGeneration++;
     this._retryIfLostDisconnectTime = null;
     this._retryIfLostIsConnected = false;
+
+    if (this._terminalDisconnectNotified) {
+      return;
+    }
+    this._terminalDisconnectNotified = true;
 
     if (this._onEventFn) {
       this._onEventFn("conn", RaftConnEvent.CONN_DISCONNECTED, RaftConnEventNames[RaftConnEvent.CONN_DISCONNECTED]);
