@@ -74,6 +74,42 @@ describe("RaftChannelBLE Web Bluetooth lifecycle", () => {
     expect(channel.isConnected()).toBe(false);
   });
 
+  it("uses the default connect timeout when connTimeoutMs is zero", async () => {
+    const pendingConnect = deferred<BluetoothRemoteGATTServer>();
+    const gattState = {
+      connected: false,
+      connect: jest.fn(() => pendingConnect.promise),
+      disconnect: jest.fn(() => {
+        gattState.connected = false;
+      }),
+      getPrimaryService: jest.fn(),
+    };
+    const gatt = gattState as unknown as BluetoothRemoteGATTServer;
+    const channel = new RaftChannelBLE();
+    const connectResult = channel.connect(makeDevice(gatt), { connTimeoutMs: 0 });
+    let didSettle = false;
+    void connectResult.then(() => {
+      didSettle = true;
+    });
+
+    await jest.advanceTimersByTimeAsync(4999);
+    expect(didSettle).toBe(false);
+    expect(gatt.disconnect).not.toHaveBeenCalled();
+
+    await jest.advanceTimersByTimeAsync(1);
+    await expect(connectResult).resolves.toBe(false);
+    expect(gatt.disconnect).toHaveBeenCalledTimes(1);
+
+    gattState.connected = true;
+    pendingConnect.resolve(gatt);
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(gatt.disconnect).toHaveBeenCalledTimes(2);
+    expect(gattState.connected).toBe(false);
+  });
+
   it("does not let an older late connection disconnect a newer GATT owner", async () => {
     const oldLateConnect = deferred<BluetoothRemoteGATTServer>();
     const txCharacteristic = makeCharacteristic();
@@ -126,6 +162,102 @@ describe("RaftChannelBLE Web Bluetooth lifecycle", () => {
     expect(gattState.connected).toBe(true);
     expect(oldChannel.isConnected()).toBe(false);
     expect(newChannel.isConnected()).toBe(true);
+  });
+
+  it("allows a pending GATT connection to be superseded", async () => {
+    const pendingConnect = deferred<BluetoothRemoteGATTServer>();
+    const txCharacteristic = makeCharacteristic();
+    const rxCharacteristic = makeCharacteristic();
+    const service = {
+      uuid: "service",
+      getCharacteristic: jest.fn(async (uuid: string) =>
+        uuid.endsWith("8e") ? txCharacteristic : rxCharacteristic),
+    } as unknown as BluetoothRemoteGATTService;
+    let connectCallCount = 0;
+    const gattState = {
+      connected: false,
+      connect: jest.fn(() => {
+        connectCallCount++;
+        if (connectCallCount === 1) {
+          return pendingConnect.promise;
+        }
+        gattState.connected = true;
+        return Promise.resolve(gatt);
+      }),
+      disconnect: jest.fn(() => {
+        gattState.connected = false;
+      }),
+      getPrimaryService: jest.fn(async () => service),
+    };
+    const gatt = gattState as unknown as BluetoothRemoteGATTServer;
+    const oldChannel = new RaftChannelBLE();
+    const oldConnEvent = jest.fn();
+    oldChannel.setOnConnEvent(oldConnEvent);
+    const oldResult = oldChannel.connect(makeDevice(gatt), { connTimeoutMs: 1000 });
+    await Promise.resolve();
+
+    const newChannel = new RaftChannelBLE();
+    const newResult = newChannel.connect(makeDevice(gatt), { connTimeoutMs: 1000 });
+    await jest.advanceTimersByTimeAsync(100);
+    await expect(newResult).resolves.toBe(true);
+
+    pendingConnect.resolve(gatt);
+    await expect(oldResult).resolves.toBe(false);
+
+    expect(gatt.connect).toHaveBeenCalledTimes(2);
+    expect(gatt.disconnect).not.toHaveBeenCalled();
+    expect(oldChannel.isConnected()).toBe(false);
+    expect(newChannel.isConnected()).toBe(true);
+    expect(oldConnEvent).not.toHaveBeenCalled();
+  });
+
+  it("disconnects a superseded pending connection that resolves unowned", async () => {
+    const pendingConnect = deferred<BluetoothRemoteGATTServer>();
+    const txCharacteristic = makeCharacteristic();
+    const rxCharacteristic = makeCharacteristic();
+    const service = {
+      uuid: "service",
+      getCharacteristic: jest.fn(async (uuid: string) =>
+        uuid.endsWith("8e") ? txCharacteristic : rxCharacteristic),
+    } as unknown as BluetoothRemoteGATTService;
+    let connectCallCount = 0;
+    const gattState = {
+      connected: false,
+      connect: jest.fn(() => {
+        connectCallCount++;
+        if (connectCallCount === 1) {
+          return pendingConnect.promise;
+        }
+        gattState.connected = true;
+        return Promise.resolve(gatt);
+      }),
+      disconnect: jest.fn(() => {
+        gattState.connected = false;
+      }),
+      getPrimaryService: jest.fn(async () => service),
+    };
+    const gatt = gattState as unknown as BluetoothRemoteGATTServer;
+    const oldChannel = new RaftChannelBLE();
+    const oldResult = oldChannel.connect(makeDevice(gatt), { connTimeoutMs: 1000 });
+    await Promise.resolve();
+
+    const newChannel = new RaftChannelBLE();
+    const newResult = newChannel.connect(makeDevice(gatt), { connTimeoutMs: 1000 });
+    await jest.advanceTimersByTimeAsync(100);
+    await expect(newResult).resolves.toBe(true);
+
+    await newChannel.disconnect();
+    expect(gatt.disconnect).toHaveBeenCalledTimes(1);
+    expect(gattState.connected).toBe(false);
+
+    gattState.connected = true;
+    pendingConnect.resolve(gatt);
+    await expect(oldResult).resolves.toBe(false);
+
+    expect(gatt.disconnect).toHaveBeenCalledTimes(2);
+    expect(gattState.connected).toBe(false);
+    expect(oldChannel.isConnected()).toBe(false);
+    expect(newChannel.isConnected()).toBe(false);
   });
 
   it("disconnects an older late connection after a newer owner has released GATT", async () => {
@@ -392,7 +524,7 @@ describe("RaftChannelBLE Web Bluetooth lifecycle", () => {
     );
   });
 
-  it("removes the previous owner's RX listener when GATT is superseded", async () => {
+  it("does not supersede an established live GATT owner", async () => {
     const txCharacteristic = makeCharacteristic();
     const rxCharacteristic = makeCharacteristic();
     const service = {
@@ -412,25 +544,29 @@ describe("RaftChannelBLE Web Bluetooth lifecycle", () => {
       getPrimaryService: jest.fn(async () => service),
     };
     const gatt = gattState as unknown as BluetoothRemoteGATTServer;
-    const device = makeDevice(gatt);
+    const oldDevice = makeDevice(gatt);
+    const newDevice = makeDevice(gatt);
     const oldConnEvent = jest.fn();
     const oldChannel = new RaftChannelBLE();
     oldChannel.setOnConnEvent(oldConnEvent);
-    const oldResult = oldChannel.connect(device, { connTimeoutMs: 1000 });
+    const oldResult = oldChannel.connect(oldDevice, { connTimeoutMs: 1000 });
     await jest.runAllTimersAsync();
     await expect(oldResult).resolves.toBe(true);
     const oldRxListener = (rxCharacteristic.addEventListener as jest.Mock)
       .mock.calls[0][1] as (event: Event) => void;
 
     const newChannel = new RaftChannelBLE();
-    const newResult = newChannel.connect(device, { connTimeoutMs: 1000 });
-    await jest.runAllTimersAsync();
-    await expect(newResult).resolves.toBe(true);
+    const newResult = newChannel.connect(newDevice, { connTimeoutMs: 1000 });
+    await expect(newResult).resolves.toBe(false);
 
-    expect(oldChannel.isConnected()).toBe(false);
-    expect(newChannel.isConnected()).toBe(true);
-    expect(oldConnEvent).toHaveBeenCalledTimes(1);
-    expect(rxCharacteristic.removeEventListener).toHaveBeenCalledWith(
+    expect(gatt.connect).toHaveBeenCalledTimes(1);
+    expect(gatt.disconnect).not.toHaveBeenCalled();
+    expect(oldChannel.isConnected()).toBe(true);
+    expect(newChannel.isConnected()).toBe(false);
+    expect(oldConnEvent).not.toHaveBeenCalled();
+    expect(oldDevice.removeEventListener).not.toHaveBeenCalled();
+    expect(newDevice.addEventListener).not.toHaveBeenCalled();
+    expect(rxCharacteristic.removeEventListener).not.toHaveBeenCalledWith(
       "characteristicvaluechanged",
       oldRxListener
     );

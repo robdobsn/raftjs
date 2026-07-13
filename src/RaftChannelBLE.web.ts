@@ -21,13 +21,15 @@ class RaftBLEConnectTimeoutError extends Error {
 interface GATTOwnership {
   readonly generation: number;
   connectPending: boolean;
+  readonly isLive: () => boolean;
   readonly onSuperseded: () => void;
 }
 
 // A BluetoothRemoteGATTServer can be shared by separate BluetoothDevice references
-// and separate RaftChannelBLE instances. Track the latest RaftJS connection
-// operation so cleanup from an older asynchronous operation cannot disconnect a
-// newer owner.
+// and separate RaftChannelBLE instances. Keep an established live connection as
+// the owner, while allowing unfinished or stale operations to be superseded. An
+// ownership token ensures older asynchronous cleanup cannot disconnect a newer
+// owner.
 const gattOwnerships = new WeakMap<BluetoothRemoteGATTServer, GATTOwnership>();
 let nextGATTOwnershipGeneration = 0;
 
@@ -180,11 +182,20 @@ export default class RaftChannelBLE implements RaftChannel {
     return this._bleDevice || "";
   }
 
-  private claimGATTOwnership(gatt: BluetoothRemoteGATTServer): GATTOwnership {
+  private claimGATTOwnership(
+    gatt: BluetoothRemoteGATTServer
+  ): GATTOwnership | null {
     const previousOwnership = gattOwnerships.get(gatt);
+    if (previousOwnership?.isLive()) {
+      return null;
+    }
+
     const ownership: GATTOwnership = {
       generation: ++nextGATTOwnershipGeneration,
       connectPending: false,
+      isLive: () => gatt.connected &&
+        this._isConnected &&
+        this._gattOwnership === ownership,
       onSuperseded: () => this.handleGATTSuperseded(ownership),
     };
     gattOwnerships.set(gatt, ownership);
@@ -388,11 +399,15 @@ export default class RaftChannelBLE implements RaftChannel {
       return false;
     }
 
-    const operationTimeoutMs = _connectorOptions.connTimeoutMs ?? 5000;
+    const operationTimeoutMs = _connectorOptions.connTimeoutMs || 5000;
     const ownership = this.claimGATTOwnership(gatt);
+    if (!ownership) {
+      return false;
+    }
 
     for (let connRetry = 0; connRetry < this._maxConnRetries; connRetry++) {
       const attemptID = ++this._connectAttemptID;
+      let gattConnectCompleted = false;
 
       if (!this.ownsGATT(gatt, ownership)) {
         this.releaseGATTOwnership(gatt, ownership);
@@ -405,6 +420,7 @@ export default class RaftChannelBLE implements RaftChannel {
           operationTimeoutMs,
           ownership
         );
+        gattConnectCompleted = true;
         if (!gatt.connected) {
           throw new Error("GATT connect completed without a connection");
         }
@@ -499,6 +515,12 @@ export default class RaftChannelBLE implements RaftChannel {
         return true;
       } catch (error: unknown) {
         if (attemptID !== this._connectAttemptID && !this._disconnectRequested) {
+          // A superseded connect can resolve after the newer owner has already
+          // released GATT. Clean up only when no newer ownership still exists.
+          if (gattConnectCompleted) {
+            await this.disconnectLateGATTIfSafe(gatt, ownership);
+            this.releaseGATTOwnership(gatt, ownership);
+          }
           return false;
         }
 
