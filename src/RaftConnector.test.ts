@@ -101,3 +101,33 @@ describe("RaftConnector reconnect deadline", () => {
     expect(connector.isConnected()).toBe(true);
   });
 });
+
+describe("RaftConnector terminal disconnect", () => {
+  beforeEach(() => {
+    jest.useFakeTimers();
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it("lets page unload force down a channel in the normal disconnect grace period", async () => {
+    const channel = {
+      disconnect: jest.fn(async () => undefined),
+      requiresSubscription: jest.fn(() => false),
+      ricRestCmdBeforeDisconnect: jest.fn(() => null),
+    } as unknown as RaftChannel;
+    const connector = new RaftConnector();
+    (connector as unknown as { _raftChannel: RaftChannel })._raftChannel = channel;
+
+    const normalDisconnect = connector.disconnect();
+    expect(channel.disconnect).not.toHaveBeenCalled();
+
+    connector.disconnectForPageUnload();
+    expect(channel.disconnect).toHaveBeenCalledTimes(1);
+
+    await jest.advanceTimersByTimeAsync(1000);
+    await normalDisconnect;
+    expect(channel.disconnect).toHaveBeenCalledTimes(2);
+  });
+});

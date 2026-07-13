@@ -53,6 +53,7 @@ export default class RaftConnector {
 
   // Channel
   private _raftChannel: RaftChannel | null = null;
+  private _disconnectingChannel: RaftChannel | null = null;
 
   // Channel connection method and locator
   private _channelConnMethod = "";
@@ -412,33 +413,43 @@ export default class RaftConnector {
       // Store reference to channel before async operations to avoid race condition
       const channelToDisconnect = this._raftChannel;
       this._raftChannel = null;
+      this._disconnectingChannel = channelToDisconnect;
 
-      // If the channel uses publish subscriptions, send an explicit unsubscribe
-      // so the device tears down its pub topic cleanly rather than relying on
-      // the link drop. Bounded by a timeout because the firmware may already
-      // be unreachable.
-      if (this._systemType?.subscribeForUpdates && channelToDisconnect.requiresSubscription()) {
+      try {
+        // If the channel uses publish subscriptions, send an explicit unsubscribe
+        // so the device tears down its pub topic cleanly rather than relying on
+        // the link drop. Bounded by a timeout because the firmware may already
+        // be unreachable.
+        if (this._systemType?.subscribeForUpdates && channelToDisconnect.requiresSubscription()) {
+          try {
+            await withTimeout(
+              this._systemType.subscribeForUpdates(this._raftSystemUtils, false),
+              DISCONNECT_SUBSCRIPTION_TIMEOUT_MS
+            );
+            RaftLog.info("disconnect unsubscribed from updates");
+          } catch (error) {
+            RaftLog.warn(`disconnect unsubscribe for updates failed ${error}`);
+          }
+        }
+
+        // Check if there is a RICREST command to send before disconnecting
+        const ricRestCommand = channelToDisconnect.ricRestCmdBeforeDisconnect();
+        if (ricRestCommand) {
+          console.log(`sending RICREST command before disconnect: ${ricRestCommand}`);
+          await this.sendRICRESTMsg(ricRestCommand, {});
+        }
+        // Pause a little before disconnecting
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        // await this.sendRICRESTMsg("bledisc", {});
+      } finally {
         try {
-          await withTimeout(
-            this._systemType.subscribeForUpdates(this._raftSystemUtils, false),
-            DISCONNECT_SUBSCRIPTION_TIMEOUT_MS
-          );
-          RaftLog.info("disconnect unsubscribed from updates");
-        } catch (error) {
-          RaftLog.warn(`disconnect unsubscribe for updates failed ${error}`);
+          await channelToDisconnect.disconnect();
+        } finally {
+          if (this._disconnectingChannel === channelToDisconnect) {
+            this._disconnectingChannel = null;
+          }
         }
       }
-
-      // Check if there is a RICREST command to send before disconnecting
-      const ricRestCommand = channelToDisconnect.ricRestCmdBeforeDisconnect();
-      if (ricRestCommand) {
-        console.log(`sending RICREST command before disconnect: ${ricRestCommand}`);
-        await this.sendRICRESTMsg(ricRestCommand, {});
-      }
-      // Pause a little before disconnecting
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      // await this.sendRICRESTMsg("bledisc", {});
-      await channelToDisconnect.disconnect();
     }
   }
 
@@ -453,15 +464,19 @@ export default class RaftConnector {
     this._retryIfLostDisconnectTime = null;
     this._retryIfLostGeneration++;
 
-    if (!this._raftChannel) {
+    const channelToDisconnect = this._raftChannel ?? this._disconnectingChannel;
+    if (!channelToDisconnect) {
       return;
     }
 
-    const channelToDisconnect = this._raftChannel;
-    this._raftChannel = null;
+    if (this._raftChannel === channelToDisconnect) {
+      this._raftChannel = null;
+    }
 
     try {
-      void channelToDisconnect.disconnect();
+      void channelToDisconnect.disconnect().catch(error => {
+        RaftLog.warn(`RaftConnector.disconnectForPageUnload failed ${error}`);
+      });
     } catch (error) {
       RaftLog.warn(`RaftConnector.disconnectForPageUnload failed ${error}`);
     }
