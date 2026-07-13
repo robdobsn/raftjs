@@ -476,19 +476,23 @@ export default class RaftUtils {
     }
   }
 
-  static withTimeout(ms: number, promise: Promise<any>) {
-    let id: NodeJS.Timeout;
-    const timeout = new Promise((_, reject) => {
-      id = setTimeout(() => {
-        clearTimeout(id);
-        reject('Timed out in ' + ms + 'ms.')
-      }, ms)
-    })
+  static withTimeout<T>(ms: number, promise: Promise<T>): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const timeoutID = setTimeout(() => {
+        reject('Timed out in ' + ms + 'ms.');
+      }, ms);
 
-    return Promise.race([
-      promise,
-      timeout
-    ])
+      promise.then(
+        (value) => {
+          clearTimeout(timeoutID);
+          resolve(value);
+        },
+        (error) => {
+          clearTimeout(timeoutID);
+          reject(error);
+        }
+      );
+    });
   }
 
   static toBufferSource(u8: Uint8Array<ArrayBufferLike>): BufferSource {
