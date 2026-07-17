@@ -406,7 +406,8 @@ export default class RaftStreamHandler {
   onSoktoMsg(soktoPos: number) {
     // Get how far we've progressed in file
     this._soktoPos = soktoPos;
-    this._soktoReceived = true;
+    // A full-length SOKTO is the normal end-of-stream acknowledgement.
+    this._soktoReceived = soktoPos < this._streamBuffer.length;
     RaftLog.debug(`onSoktoMsg received file up to ${this._soktoPos}`);
   }
 }

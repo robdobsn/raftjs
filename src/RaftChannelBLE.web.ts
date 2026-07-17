@@ -74,8 +74,8 @@ export default class RaftChannelBLE implements RaftChannel {
 
   // Max bytes per BLE write - messages larger than this are split into chunks.
   // Web Bluetooth doesn't expose the negotiated MTU, so use a conservative
-  // default that works with BLE 4.2+ (ATT_MTU 251 → payload 244).
-  private _maxBleWriteSize = 244;
+  // default compatible with an ATT_MTU of 185.
+  private _maxBleWriteSize = 182;
 
   fhBatchAckSize(): number {
     return this._requestedBatchAckSize;

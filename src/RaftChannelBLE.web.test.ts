@@ -599,4 +599,33 @@ describe("RaftChannelBLE Web Bluetooth lifecycle", () => {
     await expect(channel.sendTxMsg(Uint8Array.of(1))).resolves.toBe(false);
     expect(failedWrite).toHaveBeenCalledTimes(1);
   });
+
+  it("chunks BLE writes for an ATT MTU of 185", async () => {
+    const writeValueWithoutResponse = jest.fn<
+      Promise<void>,
+      [BufferSource]
+    >(() => Promise.resolve());
+    const txCharacteristic = makeCharacteristic({
+      writeValueWithoutResponse,
+    });
+    const gatt = {
+      connected: true,
+      disconnect: jest.fn(),
+    } as unknown as BluetoothRemoteGATTServer;
+    const channel = new RaftChannelBLE();
+    const channelState = channel as unknown as {
+      _bleDevice: BluetoothDevice;
+      _characteristicTx: BluetoothRemoteGATTCharacteristic;
+      _msgTxTimeLast: number;
+    };
+    channelState._bleDevice = makeDevice(gatt);
+    channelState._characteristicTx = txCharacteristic;
+    channelState._msgTxTimeLast = 0;
+
+    await expect(channel.sendTxMsg(new Uint8Array(400))).resolves.toBe(true);
+
+    expect(
+      writeValueWithoutResponse.mock.calls.map(([chunk]) => chunk.byteLength)
+    ).toEqual([182, 182, 36]);
+  });
 });
