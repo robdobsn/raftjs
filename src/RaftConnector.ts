@@ -849,8 +849,9 @@ export default class RaftConnector {
       // Set timer to try to reconnect
       setTimeout(async () => {
 
-        // Try to connect
-        const isConn = await this._connectToChannel();
+        // Try to connect - use the full connect() path so system-type
+        // discovery and subscriptions are re-established after reconnect
+        const isConn = await this.connect(this._channelConnLocator);
         if (!isConn) {
           this._retryConnection();
         } else {
