@@ -364,6 +364,14 @@ export default class RaftConnector {
         this._systemType.setup(this._raftSystemUtils, this._onEventFn);
       }
 
+      // Apply per-system-type BLE write size now the type is known (the channel
+      // connected before this point using the conservative default).
+      const bleMaxWriteSize = this._systemType?.connectorOptions?.bleMaxWriteSize;
+      if (bleMaxWriteSize !== undefined && this._raftChannel &&
+        typeof (this._raftChannel as { setMaxWriteSize?: unknown }).setMaxWriteSize === "function") {
+        (this._raftChannel as unknown as { setMaxWriteSize: (bytes: number) => void }).setMaxWriteSize(bleMaxWriteSize);
+      }
+
       // Check if subscription required
       if (this._systemType &&
         this._systemType.subscribeForUpdates &&
@@ -974,9 +982,11 @@ export default class RaftConnector {
         this._retryIfLostIsConnected = true;
         this._retryIfLostGeneration++;
 
-        // Channel is back. Re-establish system subscriptions and file-handler
-        // config, which the peer drops on reboot, without the full connect()
-        // path (avoids re-running system-type setup, e.g. Marty LED verify).
+        // Channel is back. Re-establish system subscriptions, which the peer
+        // drops on reboot, without the full connect() path (avoids re-running
+        // system-type setup, e.g. Marty LED verify).
+        // TODO: needs testing on real hardware (power-cycle reconnect) to
+        // confirm data resumes without the full connect() path.
         await this._reestablishAfterReconnect();
 
         if (this._onEventFn) {

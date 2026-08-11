@@ -11,6 +11,7 @@ export interface ConnectorOptions {
   connTimeoutMs?: number;
   bleConnItvlMs?: number;
   bleUuid?: string;
+  bleMaxWriteSize?: number;  // Max bytes per BLE write before chunking (default 182)
   syncTimeOnConnect?: boolean;  // Send UTC time to device after connecting (default: true)
 }
 

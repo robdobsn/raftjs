@@ -84,6 +84,15 @@ export default class RaftChannelBLE implements RaftChannel {
     return this._requestedFileBlockSize;
   }
 
+  // Set the max bytes per BLE write (clamped to a sane range). Web Bluetooth
+  // does not expose the negotiated MTU, so this is set per system type.
+  setMaxWriteSize(bytes: number): void {
+    if (!Number.isFinite(bytes)) {
+      return;
+    }
+    this._maxBleWriteSize = Math.max(20, Math.min(512, Math.floor(bytes)));
+  }
+
   // Set message handler
   setMsgHandler(raftMsgHandler: RaftMsgHandler): void {
     this._raftMsgHandler = raftMsgHandler;
@@ -380,6 +389,9 @@ export default class RaftChannelBLE implements RaftChannel {
 
   // Connect to a device
   async connect(locator: string | object, _connectorOptions: ConnectorOptions): Promise<boolean> {
+    if (_connectorOptions.bleMaxWriteSize !== undefined) {
+      this.setMaxWriteSize(_connectorOptions.bleMaxWriteSize);
+    }
     this.clearRxListener();
     if (this._eventListenerFn && this._bleDevice) {
       this._bleDevice.removeEventListener(
