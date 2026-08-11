@@ -8,6 +8,10 @@ on:
         description: 'The branch to checkout'
         required: false
         default: 'main'
+      npm_tag:
+        description: 'The npm dist-tag to publish'
+        required: false
+        default: 'latest'
 
 # Required for OIDC trusted publishing
 permissions:
@@ -38,4 +42,6 @@ jobs:
         run: npm install -g npm@11.15.0
 
       - name: Publish package
-        run: npm publish --access public
+        env:
+          NPM_DIST_TAG: ${{ github.event.inputs.npm_tag || 'latest' }}
+        run: npm publish --access public --tag "$NPM_DIST_TAG"

@@ -11,7 +11,7 @@ export default class SystemTypeMarty implements RaftSystemType {
   defaultWiFiHostname = "Marty";
   firmwareDestName = "ricfw";
   normalFileDestName = "fs";
-  connectorOptions = {wsSuffix: "ws", bleConnItvlMs: 7.5};
+  connectorOptions = {wsSuffix: "ws", bleConnItvlMs: 7.5, bleMaxWriteSize: 182};
   BLEServiceUUIDs = ["aa76677e-9cfd-4626-a510-0d305be57c8d"];
   BLECmdUUID = "aa76677e-9cfd-4626-a510-0d305be57c8e";
   BLERespUUID = "aa76677e-9cfd-4626-a510-0d305be57c8f";

@@ -53,6 +53,7 @@ export default class RaftConnector {
 
   // Channel
   private _raftChannel: RaftChannel | null = null;
+  private _disconnectingChannels = new Set<RaftChannel>();
 
   // Channel connection method and locator
   private _channelConnMethod = "";
@@ -80,6 +81,8 @@ export default class RaftConnector {
   private _retryIfLostIsConnected = false;
   private _retryIfLostDisconnectTime: number | null = null;
   private readonly _retryIfLostRetryDelayMs = 500;
+  private _retryIfLostGeneration = 0;
+  private _terminalDisconnectNotified = false;
 
   // File handler
   private _raftFileHandler: RaftFileHandler = new RaftFileHandler(
@@ -162,7 +165,16 @@ export default class RaftConnector {
     this._retryIfLostEnabled = enableRetry;
     this._retryIfLostForSecs = retryForSecs;
     if (!this._retryIfLostEnabled) {
-      this._retryIfLostIsConnected = false;
+      if (this._retryIfLostDisconnectTime !== null) {
+        const retryChannel = this._raftChannel;
+        this._finishRetryConnection(this._retryIfLostGeneration);
+        if (retryChannel) {
+          this._disconnectRetryChannel(retryChannel);
+        }
+      } else {
+        this._retryIfLostIsConnected = false;
+        this._retryIfLostGeneration++;
+      }
     }
     RaftLog.debug(`setRetryConnectionIfLost ${enableRetry} retry for ${retryForSecs}`);
   }
@@ -318,6 +330,9 @@ export default class RaftConnector {
 
     // Store locator
     this._channelConnLocator = locator;
+    this._retryIfLostGeneration++;
+    this._retryIfLostDisconnectTime = null;
+    this._retryIfLostIsConnected = false;
 
     // Connect channel first (system type resolution needs a live connection)
     let connOk = false;
@@ -332,6 +347,7 @@ export default class RaftConnector {
     }
 
     if (connOk) {
+      this._retryIfLostIsConnected = true;
 
       // Resolve system type now that the channel is connected
       if (this._getSystemTypeCB) {
@@ -346,6 +362,15 @@ export default class RaftConnector {
       // Setup system type
       if (this._systemType) {
         this._systemType.setup(this._raftSystemUtils, this._onEventFn);
+      }
+
+      // Apply per-system-type BLE write size now the type is known (the channel
+      // connected before this point using the conservative default).
+      const bleMaxWriteSize = this._systemType?.connectorOptions?.bleMaxWriteSize;
+      if (bleMaxWriteSize !== undefined && this._raftChannel &&
+        typeof (this._raftChannel as { setMaxWriteSize?: unknown }).setMaxWriteSize === "function") {
+        RaftLog.info(`connect applying bleMaxWriteSize ${bleMaxWriteSize} for system type ${this._systemType?.nameForDialogs ?? "unknown"}`);
+        (this._raftChannel as unknown as { setMaxWriteSize: (bytes: number) => void }).setMaxWriteSize(bleMaxWriteSize);
       }
 
       // Check if subscription required
@@ -399,37 +424,47 @@ export default class RaftConnector {
   async disconnect(): Promise<void> {
     // Disconnect
     this._retryIfLostIsConnected = false;
+    this._retryIfLostDisconnectTime = null;
+    this._retryIfLostGeneration++;
     if (this._raftChannel) {
       // Store reference to channel before async operations to avoid race condition
       const channelToDisconnect = this._raftChannel;
       this._raftChannel = null;
+      this._disconnectingChannels.add(channelToDisconnect);
 
-      // If the channel uses publish subscriptions, send an explicit unsubscribe
-      // so the device tears down its pub topic cleanly rather than relying on
-      // the link drop. Bounded by a timeout because the firmware may already
-      // be unreachable.
-      if (this._systemType?.subscribeForUpdates && channelToDisconnect.requiresSubscription()) {
+      try {
+        // If the channel uses publish subscriptions, send an explicit unsubscribe
+        // so the device tears down its pub topic cleanly rather than relying on
+        // the link drop. Bounded by a timeout because the firmware may already
+        // be unreachable.
+        if (this._systemType?.subscribeForUpdates && channelToDisconnect.requiresSubscription()) {
+          try {
+            await withTimeout(
+              this._systemType.subscribeForUpdates(this._raftSystemUtils, false),
+              DISCONNECT_SUBSCRIPTION_TIMEOUT_MS
+            );
+            RaftLog.info("disconnect unsubscribed from updates");
+          } catch (error) {
+            RaftLog.warn(`disconnect unsubscribe for updates failed ${error}`);
+          }
+        }
+
+        // Check if there is a RICREST command to send before disconnecting
+        const ricRestCommand = channelToDisconnect.ricRestCmdBeforeDisconnect();
+        if (ricRestCommand) {
+          console.log(`sending RICREST command before disconnect: ${ricRestCommand}`);
+          await this.sendRICRESTMsg(ricRestCommand, {});
+        }
+        // Pause a little before disconnecting
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        // await this.sendRICRESTMsg("bledisc", {});
+      } finally {
         try {
-          await withTimeout(
-            this._systemType.subscribeForUpdates(this._raftSystemUtils, false),
-            DISCONNECT_SUBSCRIPTION_TIMEOUT_MS
-          );
-          RaftLog.info("disconnect unsubscribed from updates");
-        } catch (error) {
-          RaftLog.warn(`disconnect unsubscribe for updates failed ${error}`);
+          await channelToDisconnect.disconnect();
+        } finally {
+          this._disconnectingChannels.delete(channelToDisconnect);
         }
       }
-
-      // Check if there is a RICREST command to send before disconnecting
-      const ricRestCommand = channelToDisconnect.ricRestCmdBeforeDisconnect();
-      if (ricRestCommand) {
-        console.log(`sending RICREST command before disconnect: ${ricRestCommand}`);
-        await this.sendRICRESTMsg(ricRestCommand, {});
-      }
-      // Pause a little before disconnecting
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      // await this.sendRICRESTMsg("bledisc", {});
-      await channelToDisconnect.disconnect();
     }
   }
 
@@ -441,19 +476,24 @@ export default class RaftConnector {
    */
   disconnectForPageUnload(): void {
     this._retryIfLostIsConnected = false;
+    this._retryIfLostDisconnectTime = null;
+    this._retryIfLostGeneration++;
 
-    if (!this._raftChannel) {
-      return;
+    const channelsToDisconnect = new Set(this._disconnectingChannels);
+    if (this._raftChannel) {
+      channelsToDisconnect.add(this._raftChannel);
+      this._raftChannel = null;
     }
 
-    const channelToDisconnect = this._raftChannel;
-    this._raftChannel = null;
-
-    try {
-      void channelToDisconnect.disconnect();
-    } catch (error) {
-      RaftLog.warn(`RaftConnector.disconnectForPageUnload failed ${error}`);
-    }
+    channelsToDisconnect.forEach(channel => {
+      try {
+        void channel.disconnect().catch(error => {
+          RaftLog.warn(`RaftConnector.disconnectForPageUnload failed ${error}`);
+        });
+      } catch (error) {
+        RaftLog.warn(`RaftConnector.disconnectForPageUnload failed ${error}`);
+      }
+    });
   }
 
   // Mark: Tx Message handling -----------------------------------------------------------------------------------------
@@ -802,13 +842,20 @@ export default class RaftConnector {
   onConnEvent(eventEnum: RaftConnEvent, data: object | string | null | undefined = undefined): void {
     // Handle information clearing on disconnect
     switch (eventEnum) {
-      case RaftConnEvent.CONN_DISCONNECTED:
+      case RaftConnEvent.CONN_CONNECTED:
+        this._terminalDisconnectNotified = false;
+        break;
 
-        // Disconnect time
-        this._retryIfLostDisconnectTime = Date.now();
+      case RaftConnEvent.CONN_DISCONNECTED:
 
         // Check if retry required
         if (this._retryIfLostIsConnected && this._retryIfLostEnabled) {
+          // Ignore duplicate disconnect events while an existing retry window
+          // is active. The first physical loss owns the absolute deadline.
+          if (this._retryIfLostDisconnectTime !== null) {
+            return;
+          }
+          this._retryIfLostDisconnectTime = Date.now();
 
           // Indicate connection disrupted
           if (this._onEventFn) {
@@ -822,6 +869,12 @@ export default class RaftConnector {
           return;
 
         }
+
+        if (this._terminalDisconnectNotified) {
+          return;
+        }
+        this._terminalDisconnectNotified = true;
+        this._retryIfLostDisconnectTime = null;
 
         // Invalidate connection details
         this._raftSystemUtils.invalidate();
@@ -842,48 +895,138 @@ export default class RaftConnector {
    * Retry connection
    */
   private _retryConnection(): void {
-    // Check timeout
-    if ((this._retryIfLostDisconnectTime !== null) &&
-      (Date.now() - this._retryIfLostDisconnectTime < this._retryIfLostForSecs * 1000)) {
+    const retryGeneration = ++this._retryIfLostGeneration;
+    void this._retryConnectionLoop(retryGeneration);
+  }
 
-      // Set timer to try to reconnect
-      setTimeout(async () => {
+  private async _retryConnectionLoop(retryGeneration: number): Promise<void> {
+    const disconnectTime = this._retryIfLostDisconnectTime;
+    if (disconnectTime === null) {
+      return;
+    }
 
-        // Try to connect - use the full connect() path so system-type
-        // discovery and subscriptions are re-established after reconnect
-        const isConn = await this.connect(this._channelConnLocator);
-        if (!isConn) {
-          this._retryConnection();
-        } else {
+    const retryDeadline = disconnectTime + this._retryIfLostForSecs * 1000;
 
-          // No longer retrying
-          this._retryIfLostDisconnectTime = null;
-
-          // Indicate connection problem resolved
-          if (this._onEventFn) {
-            this._onEventFn("conn", RaftConnEvent.CONN_ISSUE_RESOLVED, RaftConnEventNames[RaftConnEvent.CONN_ISSUE_RESOLVED]);
-          }
-
-        }
-      }, this._retryIfLostRetryDelayMs);
-    } else {
-
-      // No longer connected after retry timeout
-      this._retryIfLostIsConnected = false;
-
-      // Indicate disconnection
-      if (this._onEventFn) {
-        this._onEventFn("conn", RaftConnEvent.CONN_DISCONNECTED, RaftConnEventNames[RaftConnEvent.CONN_DISCONNECTED]);
+    while (retryGeneration === this._retryIfLostGeneration) {
+      let remainingMs = retryDeadline - Date.now();
+      if (remainingMs <= 0) {
+        break;
       }
 
-      // Invalidate connection details
-      this._raftSystemUtils.invalidate();
+      await new Promise(resolve => setTimeout(
+        resolve,
+        Math.min(this._retryIfLostRetryDelayMs, remainingMs)
+      ));
 
-      // Invalidate system-type info
-      if (this._systemType && this._systemType.stateIsInvalid) {
-        this._systemType.stateIsInvalid();
+      if (retryGeneration !== this._retryIfLostGeneration) {
+        return;
+      }
+
+      remainingMs = retryDeadline - Date.now();
+      if (remainingMs <= 0) {
+        break;
+      }
+
+      const channelForAttempt = this._raftChannel;
+      const connectPromise = this._connectToChannel();
+      let timeoutID: ReturnType<typeof setTimeout> | null = null;
+      const attemptResult = await Promise.race([
+        connectPromise.then(connected => ({ connected, timedOut: false })),
+        new Promise<{ connected: boolean; timedOut: boolean }>(resolve => {
+          timeoutID = setTimeout(
+            () => resolve({ connected: false, timedOut: true }),
+            remainingMs
+          );
+        })
+      ]);
+
+      if (timeoutID !== null) {
+        clearTimeout(timeoutID);
+      }
+
+      if (retryGeneration !== this._retryIfLostGeneration) {
+        if (attemptResult.connected && channelForAttempt) {
+          this._disconnectRetryChannel(channelForAttempt);
+        } else if (attemptResult.timedOut && channelForAttempt) {
+          void connectPromise.then(connected => {
+            if (connected) {
+              this._disconnectRetryChannel(channelForAttempt);
+            }
+          });
+        }
+        return;
+      }
+
+      if (attemptResult.timedOut) {
+        // Stop the active browser/device operation now. If it completes late,
+        // disconnect again so it cannot become a stale physical connection.
+        if (channelForAttempt) {
+          this._disconnectRetryChannel(channelForAttempt);
+        }
+        void connectPromise.then(connected => {
+          if (connected && channelForAttempt) {
+            this._disconnectRetryChannel(channelForAttempt);
+          }
+        });
+        break;
+      }
+
+      if (attemptResult.connected) {
+        if (Date.now() >= retryDeadline) {
+          if (channelForAttempt) {
+            this._disconnectRetryChannel(channelForAttempt);
+          }
+          break;
+        }
+
+        this._retryIfLostDisconnectTime = null;
+        this._retryIfLostIsConnected = true;
+        this._retryIfLostGeneration++;
+
+        // Channel is back. Re-establish system subscriptions, which the peer
+        // drops on reboot, without the full connect() path (avoids re-running
+        // system-type setup, e.g. Marty LED verify).
+        await this._reestablishAfterReconnect();
+
+        if (this._onEventFn) {
+          this._onEventFn("conn", RaftConnEvent.CONN_ISSUE_RESOLVED, RaftConnEventNames[RaftConnEvent.CONN_ISSUE_RESOLVED]);
+        }
+        return;
       }
     }
+
+    this._finishRetryConnection(retryGeneration);
+  }
+
+  private _finishRetryConnection(retryGeneration: number): void {
+    if (retryGeneration !== this._retryIfLostGeneration) {
+      return;
+    }
+
+    this._retryIfLostGeneration++;
+    this._retryIfLostDisconnectTime = null;
+    this._retryIfLostIsConnected = false;
+
+    if (this._terminalDisconnectNotified) {
+      return;
+    }
+    this._terminalDisconnectNotified = true;
+
+    if (this._onEventFn) {
+      this._onEventFn("conn", RaftConnEvent.CONN_DISCONNECTED, RaftConnEventNames[RaftConnEvent.CONN_DISCONNECTED]);
+    }
+
+    this._raftSystemUtils.invalidate();
+
+    if (this._systemType && this._systemType.stateIsInvalid) {
+      this._systemType.stateIsInvalid();
+    }
+  }
+
+  private _disconnectRetryChannel(channel: RaftChannel): void {
+    void channel.disconnect().catch(error => {
+      RaftLog.warn(`RaftConnector retry cleanup failed: ${error}`);
+    });
   }
 
   /**
@@ -896,7 +1039,6 @@ export default class RaftConnector {
       if (this._raftChannel) {
         const connected = await this._raftChannel.connect(this._channelConnLocator, this._systemType ? this._systemType.connectorOptions : { });
         if (connected) {
-          this._retryIfLostIsConnected = true;
           return true;
         }
       }
@@ -904,6 +1046,27 @@ export default class RaftConnector {
       RaftLog.warn(`RaftConnector.connect() error: ${error}`);
     }
     return false;
+  }
+
+  /**
+   * Re-establish session state after a channel-only reconnect. The peer wipes
+   * subscriptions on reboot, so a bare channel reconnect resumes the link but
+   * not device data unless we re-subscribe here.
+   */
+  private async _reestablishAfterReconnect(): Promise<void> {
+    if (!this._raftChannel) {
+      return;
+    }
+    if (this._systemType &&
+      this._systemType.subscribeForUpdates &&
+      this._raftChannel.requiresSubscription()) {
+      try {
+        await this._systemType.subscribeForUpdates(this._raftSystemUtils, true);
+        RaftLog.info(`reconnect re-subscribed for updates`);
+      } catch (error: unknown) {
+        RaftLog.warn(`reconnect re-subscribe for updates failed ${error}`);
+      }
+    }
   }
 
   // Mark: OTA Update -----------------------------------------------------------------------------------------

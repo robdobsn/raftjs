@@ -10,7 +10,7 @@ export default class SystemTypeCog implements RaftSystemType {
     defaultWiFiHostname = "Cog";
     firmwareDestName = "ricfw";
     normalFileDestName = "fs";
-    connectorOptions = {wsSuffix: "wsjson", bleConnItvlMs: 50};
+    connectorOptions = {wsSuffix: "wsjson", bleConnItvlMs: 50, bleMaxWriteSize: 244};
     BLEServiceUUIDs = ["da903f65-d5c2-4f4d-a065-d1aade7af874"];
     BLECmdUUID = "aa76677e-9cfd-4626-a510-0d305be57c8e";
     BLERespUUID = "aa76677e-9cfd-4626-a510-0d305be57c8f";
