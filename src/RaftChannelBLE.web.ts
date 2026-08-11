@@ -88,9 +88,16 @@ export default class RaftChannelBLE implements RaftChannel {
   // does not expose the negotiated MTU, so this is set per system type.
   setMaxWriteSize(bytes: number): void {
     if (!Number.isFinite(bytes)) {
+      RaftLog.warn(`RaftChannelBLE.setMaxWriteSize ignoring non-finite value ${bytes}`);
       return;
     }
-    this._maxBleWriteSize = Math.max(20, Math.min(512, Math.floor(bytes)));
+    const clamped = Math.max(20, Math.min(512, Math.floor(bytes)));
+    if (clamped !== this._maxBleWriteSize) {
+      RaftLog.info(`RaftChannelBLE.setMaxWriteSize maxBleWriteSize ${this._maxBleWriteSize} -> ${clamped} (requested ${bytes})`);
+    } else {
+      RaftLog.debug(`RaftChannelBLE.setMaxWriteSize maxBleWriteSize unchanged at ${clamped} (requested ${bytes})`);
+    }
+    this._maxBleWriteSize = clamped;
   }
 
   // Set message handler
@@ -699,6 +706,7 @@ export default class RaftChannelBLE implements RaftChannel {
         if (msg.length <= this._maxBleWriteSize) {
           await this._writeChunk(msg);
         } else {
+          RaftLog.debug(`RaftChannelBLE.sendTxMsg splitting ${msg.length} bytes into ${this._maxBleWriteSize}-byte chunks`);
           for (let offset = 0; offset < msg.length; offset += this._maxBleWriteSize) {
             const chunk = msg.subarray(offset, Math.min(offset + this._maxBleWriteSize, msg.length));
             await this._writeChunk(chunk);
