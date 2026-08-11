@@ -222,4 +222,48 @@ describe("DeviceManager binary devbin parsing", () => {
         expect(devicesState["0_0_3"].deviceType).toBe("Power");
         expect(devicesState["0_0_3"].deviceAttributes.battery.values).toEqual([99]);
     });
+
+    it("keeps current length-prefixed direct device records distinct when bus and address are both zero", async () => {
+        const lightInfo = makeTypeInfo("LightSensors", 8, [
+            { n: "ch0", t: ">H" },
+            { n: "ch1", t: ">H" },
+            { n: "ch2", t: ">H" },
+            { n: "ch3", t: ">H" }
+        ]);
+        const powerInfo = makeTypeInfo("Power", 1, [
+            { n: "battery", t: "B" }
+        ]);
+        const deviceManager = await makeDeviceManager({ "2": lightInfo, "3": powerInfo });
+        const rxMsg = Uint8Array.from([
+            0x00, 0x80,
+            0xDB, 0xFF, 0x00,
+            0x00, 0x13,
+            0x80,
+            0x00, 0x00, 0x00, 0x00,
+            0x00, 0x02,
+            0x01,
+            0x0a,
+            0x00, 0x01,
+            0x00, 0x0a,
+            0x00, 0x0b,
+            0x00, 0x0c,
+            0x00, 0x0d,
+            0x00, 0x0c,
+            0x80,
+            0x00, 0x00, 0x00, 0x00,
+            0x00, 0x03,
+            0x02,
+            0x03,
+            0x00, 0x02,
+            0x63
+        ]);
+
+        await deviceManager.handleClientMsgBinary(rxMsg);
+
+        const devicesState = deviceManager.getDevicesState();
+        expect(devicesState["0_0_2"].deviceType).toBe("LightSensors");
+        expect(devicesState["0_0_2"].deviceAttributes.ch0.values).toEqual([10]);
+        expect(devicesState["0_0_3"].deviceType).toBe("Power");
+        expect(devicesState["0_0_3"].deviceAttributes.battery.values).toEqual([99]);
+    });
 });

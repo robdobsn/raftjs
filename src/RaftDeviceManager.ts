@@ -417,11 +417,11 @@ export class DeviceManager implements RaftDeviceMgrIF{
             // console.log(`DevMan.handleClientMsgBinary debugIdx ${debugMsgIndex} bus ${busNum} isOnline ${isOnline} devAddr 0x${devAddr.toString(16)} devTypeIdx ${devTypeIdx} pollDataLen ${recordLen - recordHeaderLen}`);
 
             // Format device address as canonical hex and build device key.
-            // For DevbinV0Fixed direct devices (bus=0 addr=0) different
-            // devTypeIdx values would collide on the same "0_0" key, so
-            // DevbinV0Fixed records disambiguate by appending the devTypeIdx.
+            // Direct-connect devices (bus=0 addr=0) with different devTypeIdx
+            // values would collide on the same "0_0" key, so records
+            // disambiguate by appending the devTypeIdx.
             const devAddrHex = formatDeviceAddrHex(devAddr);
-            const deviceKey = this.getBinaryDeviceKey(busNum, devAddrHex, devTypeIdx, recordPayloadFormat);
+            const deviceKey = this.getBinaryDeviceKey(busNum, devAddrHex, devTypeIdx);
 
             // Update the last update time
             this._deviceLastUpdateTime[deviceKey] = Date.now();
@@ -1037,11 +1037,13 @@ export class DeviceManager implements RaftDeviceMgrIF{
         return (fixedSampleLen > 0) && (payloadLen > 0) && (payloadLen % fixedSampleLen === 0);
     }
 
-    private getBinaryDeviceKey(busNum: number, devAddrHex: string, devTypeIdx: number, payloadFormat: DevbinPayloadFormat): string {
+    private getBinaryDeviceKey(busNum: number, devAddrHex: string, devTypeIdx: number): string {
         const baseDeviceKey = getDeviceKey(busNum.toString(), devAddrHex);
-        // DevbinV0Fixed direct devices all report bus=0 addr=0, so distinct
-        // device types would otherwise collide on the same "0_0" key.
-        if ((payloadFormat === "DevbinV0Fixed") && (busNum === 0) && (devAddrHex === "0")) {
+        // Direct-connect devices all report bus=0 addr=0 regardless of payload
+        // format (DevbinV0Fixed and DevbinV1Framed alike), so distinct device
+        // types would otherwise collide on the same "0_0" key. Disambiguate by
+        // appending the device type index.
+        if ((busNum === 0) && (devAddrHex === "0")) {
             return `${baseDeviceKey}_${devTypeIdx}`;
         }
         return baseDeviceKey;

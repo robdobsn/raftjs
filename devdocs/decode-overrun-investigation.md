@@ -1,167 +1,122 @@
-# Decode Overrun Error Investigation
+# Decode Overrun Error Investigation (RESOLVED)
 
 ## Summary
 
-The raftjs example dashboard is receiving an `AttributeHandler decode overrun` error when processing light sensor data from a Cog device. The firmware is sending 9 bytes of sensor data, but the registered schema expects only 8 bytes.
+The dashboard connected to newer Cog firmware showed only two devices (the
+"Cog Power Status" device was missing) and logged a repeating
+`AttributeHandler decode overrun` error against "Cog Light Sensors".
 
-## Error Details
+Both symptoms had a **single root cause**: a device-key collision in raftjs.
+Two different direct-connect devices were being merged onto the same
+`_devicesState` key, so one device disappeared and its samples were decoded
+with the wrong schema.
 
-**Error Message:**
+> An earlier version of this document concluded the firmware was sending an
+> "extra byte" in the light-sensor payload. That was a misdiagnosis — the
+> bytes being analysed were actually a *Power* sample misrouted into the
+> Light Sensors decoder because of the key collision described below.
+
+## Root Cause: device-key collision for DevbinV1Framed direct devices
+
+The newer Cog firmware publishes every direct-connect device with
+`bus=0, addr=0`, distinguished only by `devTypeIdx` (`BUS_NUM_DIRECT_CONN = 0`
+and `genBinaryDataMsg(..., 0 /*addr*/, ...)`). Both `DeviceLightSensors` and
+`DevicePower` are published this way.
+
+`RaftDeviceManager.getBinaryDeviceKey()` only disambiguated direct-connect
+devices by `devTypeIdx` for the **`DevbinV0Fixed`** payload format:
+
+```ts
+if ((payloadFormat === "DevbinV0Fixed") && (busNum === 0) && (devAddrHex === "0")) {
+    return `${baseDeviceKey}_${devTypeIdx}`;
+}
+return baseDeviceKey;   // → "0_0" for ALL DevbinV1Framed direct devices
 ```
-AttributeHandler decode overrun (msgBuffer):
-  deviceKey=0_0
-  deviceType=Cog Light Sensors
-  debugMsgIndex=1
-  attr.n=amb0
-  attr.t=>H
-  attrTypeSize=2
-  curFieldBufIdx=45
-  msgBuffer.length=46
-  sampleStartIdx=37
-  sampleEndIdx=46
-  availableInSample=1
-  availableInBuffer=1
-```
 
-**Key Facts:**
-- Message buffer total length: 46 bytes
-- Sample data location: bytes 37-46 (9 bytes)
-- Declared sample size in schema: 8 bytes (`pollRespMetadata.b=8`)
-- **Mismatch: Firmware sends 9 bytes, schema expects 8 bytes**
+Because the newer firmware is decoded as **`DevbinV1Framed`**, both Light
+Sensors and Power resolved to the identical key `"0_0"`:
 
-## Message Structure Analysis
+- Light Sensors registers `_devicesState["0_0"]` first (earlier in the device
+  list), so the key holds the Light Sensors schema.
+- Power records reuse that same state (it already has `deviceTypeInfo`), so
+  **Power never appears as its own device** and its samples are decoded with
+  the **Light Sensors** schema.
 
-### Binary Message Format
-The firmware sends a binary message with this structure:
-1. **Timestamp** (2 bytes, big-endian) - handled separately before attribute decoding
-2. **Sample length** (1 byte) - value is 9, meaning 9 bytes of sensor data follow
-3. **Sensor data** (9 bytes) - the actual data being decoded
-   - IR sensor 0 (ir0): `5c 60` (0x5c60)
-   - IR sensor 1 (ir1): `00 05` (0x0005)
-   - IR sensor 2 (ir2): `03 00` (0x0300)
-   - Ambient sensor 0 (amb0): `02 57` (0x0257)
-   - **Extra byte**: `01` (unknown origin)
+### Why it presented as an overrun
 
-### Expected vs Actual Schema
+A Power sample is `[timestamp:2][battV:2][battStatus:1][powerBtn:1][powerBtnLvl:2][onUSB:1]`
+= 9 bytes. Decoded against the Light Sensors schema (`timestamp` + 4×`>H` =
+needs 10 bytes) it is one byte short, so the final `amb0` read overruns.
 
-**Schema Definition (from firmware):**
-```json
-{
-  "name": "Cog Light Sensors",
-  "desc": "Light Sensors",
-  "type": "RoboCogLightV1",
-  "resp": {
-    "b": 8,
-    "a": [
-      {"n": "ir0", "t": ">H", "u": "", "r": [0, 4095], "d": 1, "f": ".0f"},
-      {"n": "ir1", "t": ">H", "u": "", "r": [0, 4095], "d": 1, "f": ".0f"},
-      {"n": "ir2", "t": ">H", "u": "", "r": [918, 2259], "d": 1, "f": ".0f"},
-      {"n": "amb0", "t": ">H", "u": "L", "r": [0, 4095], "d": 1, "f": ".0f"}
-    ]
-  }
+Example from the logs, `sampleHex=d9690005030001bc01`, decoded as **Power**:
+
+| bytes  | Power field  | value  |
+| ------ | ------------ | ------ |
+| `d969` | timestamp    | —      |
+| `0005` | battV (÷100) | 0.05 V |
+| `03`   | battStatus   | 3      |
+| `00`   | powerBtn     | no     |
+| `01bc` | powerBtnLvl  | 444    |
+| `01`   | onUSB        | yes    |
+
+That matches the Power values shown by the working (older) firmware.
+
+### Why the older (v1.9.5 / `_195release`) firmware was unaffected
+
+It emits the older `DevbinV0Fixed` layout, for which `getBinaryDeviceKey`
+already appended `devTypeIdx` (`"0_0_<idx>"`), so the direct devices did not
+collide.
+
+## Fix
+
+`getBinaryDeviceKey` now disambiguates direct-connect devices by `devTypeIdx`
+for **all** payload formats (both `DevbinV0Fixed` and `DevbinV1Framed`):
+
+```ts
+if ((busNum === 0) && (devAddrHex === "0")) {
+    return `${baseDeviceKey}_${devTypeIdx}`;
 }
 ```
 
-**Expected data (based on schema):**
-- ir0: 2 bytes
-- ir1: 2 bytes
-- ir2: 2 bytes
-- amb0: 2 bytes
-- **Total: 8 bytes**
+The per-device `devman/typeinfo?deviceid=0_0_<idx>` query remains safe: the
+firmware's `RaftDeviceID::fromString` stops parsing the address at the first
+`_`, so it resolves identically to `deviceid=0_0` and the bus/type-index
+lookup (`?bus=0&type=<devTypeIdx>`) continues to supply the correct schema.
 
-**Actual data received:**
-- All 4 fields as expected (8 bytes)
-- **Plus 1 extra byte** = 9 bytes total
+Regression test: `RaftDeviceManager.test.ts` →
+"keeps current length-prefixed direct device records distinct when bus and
+address are both zero".
 
-## Root Cause
+## Related firmware bug (fixed separately)
 
-The firmware's `DeviceLightSensors::formDeviceDataResponse()` function in `components/DeviceLightSensors/DeviceLightSensors.cpp` is generating sensor data, and there is a mismatch between:
+`DeviceLightSensors::getDeviceTypeRecord()` advertised the wrong payload size:
 
-1. **What the firmware sends**: 9 bytes of sensor data (timestamp + data in the binary message)
-2. **What the schema declares**: 8 bytes of sensor data (`"b": 8`)
-
-The schema is generated dynamically by the firmware in `getDeviceTypeRecord()` based on the number of configured sensors:
-- 3 IR sensors × 2 bytes = 6 bytes
-- 1 ambient sensor × 2 bytes = 2 bytes
-- **Total: 8 bytes** (correct calculation)
-
-But the actual `formDeviceDataResponse()` is sending 9 bytes.
-
-## Investigation Points
-
-### 1. Extra Byte Origin
-The mysterious `01` byte at the end needs to be identified:
-- Is it padding?
-- Is it a sample count or indicator?
-- Is it an uninitialized buffer value?
-- Was it added in a recent firmware change?
-
-**Check:**
-- `git log -p components/DeviceLightSensors/DeviceLightSensors.cpp` around `formDeviceDataResponse()`
-- Look for recent changes that add bytes (new sensor data, flags, etc.)
-- Compare the byte count calculation in `getDeviceTypeRecord()` with actual `formDeviceDataResponse()` logic
-
-### 2. Binary Message Encoding
-The binary message encoding happens in `RaftDevice::genBinaryDataMsg()` (in RaftCore). Verify:
-- Is the framework adding extra metadata or padding?
-- Are sample boundaries being correctly calculated?
-- Is there a mismatch between the sample length byte and actual data written?
-
-**Check:**
-- `RaftDevice::genBinaryDataMsg()` implementation
-- Recent changes to binary message encoding
-- Sample length byte calculation
-
-### 3. Configuration/Build State
-- Check if the firmware was built with debug flags that add extra bytes
-- Verify that sensor configuration hasn't changed (more sensors added?)
-- Check if conditional compilation (#ifdef) is affecting byte counts
-
-## raftjs Side
-
-The raftjs library correctly detects the mismatch through the diagnostic context added in recent commits:
-- `AttrDecodeDiagContext` interface tracks sample boundaries
-- `RaftAttributeHandler.processMsgAttribute()` bounds-checks against these boundaries
-- `RaftDeviceManager` passes diagnostic context with `sampleStartIdx` and `sampleEndIdx`
-
-This is working as intended—the error indicates a real firmware/schema mismatch, not a bug in raftjs.
-
-## Recommended Fixes
-
-### Short Term (Workaround)
-Update the schema to match reality:
-```json
-"resp": {
-  "b": 9,  // Changed from 8 to 9
-  ...
-}
+```cpp
+"resp":{"b": String(pollDataSizeBytes*2) ...   // advertised b=16, real payload is 8
 ```
-This will suppress the error but doesn't fix the root cause.
 
-### Long Term (Proper Fix)
-1. **Identify the source** of the extra byte in `formDeviceDataResponse()`
-2. **Either:**
-   - Remove the extra byte if it's unintended
-   - Properly account for it in the schema and sensor processing if it's intentional
-3. **Update documentation** if there's a reason for the extra byte
-4. **Add unit tests** to prevent this mismatch in future changes
+This is why the logs showed `pollRespMetadata.b=16` for a 4×`>H` (8-byte)
+schema. It did not cause the overrun, but it defeated the payload-format
+auto-detection (`areDevbinV1FramedSamplesValid` expected sampleLen = `2 + 16`).
+Corrected to `String(pollDataSizeBytes)`. `DevicePower` was already correct
+(`"b":7`).
+
+## The `system` device role is not involved
+
+The `role`/`isSystemDevice` mechanism in RaftCore's `DeviceManager` does not
+filter devices out of `getDevicesDataBinary()` — all devices are still
+published. The missing Power device was purely the raftjs key collision.
 
 ## Related Code Locations
 
-**Firmware:**
-- Schema definition: `RoboticalCogFW/components/DeviceLightSensors/DeviceLightSensors.cpp` - `getDeviceTypeRecord()`
-- Data encoding: `RoboticalCogFW/components/DeviceLightSensors/DeviceLightSensors.cpp` - `formDeviceDataResponse()`
-- Binary message: `RoboticalCogFW/raftdevlibs/RaftCore/components/core/RaftDevice/RaftDevice.cpp` - `genBinaryDataMsg()`
-
 **raftjs:**
-- Attribute handler: `raftjs/src/RaftAttributeHandler.ts` - `processMsgAttribute()`
-- Device manager: `raftjs/src/RaftDeviceManager.ts` - `handleClientMsgBinary()`
-- Diagnostic logging: Added in recent commit with `AttrDecodeDiagContext`
+- `src/RaftDeviceManager.ts` — `getBinaryDeviceKey()` (the fix)
+- `src/RaftDeviceManager.ts` — `handleClientMsgBinary()` (device-key usage)
+- `src/RaftAttributeHandler.ts` — `processMsgAttribute()` (overrun detection)
 
-## Next Steps
-
-1. Run `git log -p` on DeviceLightSensors to find when the extra byte was introduced
-2. Check the firmware build/compile to ensure no debug additions
-3. Examine `formDeviceDataResponse()` line-by-line against sensor configuration
-4. Test with a debugger to verify what bytes are actually being transmitted
-5. Once identified, decide whether to remove the byte or update the schema
+**Firmware:**
+- `RoboticalCogFW/components/DeviceLightSensors/DeviceLightSensors.cpp` —
+  `getDeviceTypeRecord()` (`b` size fix)
+- `RaftCore/components/core/RaftDevice/RaftDevice.cpp` — `genBinaryDataMsg()`
+- `RaftCore/components/core/DeviceManager/DeviceManager.cpp` —
+  `getDevicesDataBinary()`
