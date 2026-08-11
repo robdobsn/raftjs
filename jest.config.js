@@ -7,5 +7,7 @@ module.exports = {
     transform: {
       "^.+\\.(ts|tsx)$": "ts-jest"
     },
+    moduleNameMapper: {
+      "^(.*\\/RaftChannelBLE)$": "$1.web"
+    },
   }
-  

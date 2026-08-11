@@ -24,6 +24,9 @@ export default class RaftChannelWebSocket implements RaftChannel {
   // Websocket we are connected to
   private _webSocket: WebSocket | null = null;
 
+  // URL used by the current WebSocket connection
+  private _connectedLocator = "";
+
   // Last message tx time
   // private _msgTxTimeLast = Date.now();
   // private _msgTxMinTimeBetweenMs = 15;
@@ -69,20 +72,27 @@ export default class RaftChannelWebSocket implements RaftChannel {
 
   // Get connected locator
   getConnectedLocator(): string | object {
-    return this._webSocket;
+    return this._connectedLocator;
   }
 
   // Connect to a device
   async connect(locator: string | object, connectorOptions: ConnectorOptions): Promise<boolean> {
 
     // Debug
-    RaftLog.debug("RaftChannelWebSocket.connect " + locator.toString());
+    const locatorStr = locator.toString();
+    RaftLog.debug("RaftChannelWebSocket.connect " + locatorStr);
 
     // Get ws suffix
     const wsSuffix = connectorOptions ? (connectorOptions.wsSuffix ? connectorOptions.wsSuffix : "ws") : "ws";
 
+    // A complete WebSocket URL is authoritative. Bare host locators retain the
+    // legacy behaviour of using ws:// and the system type's configured suffix.
+    const wsURL = /^wss?:\/\//i.test(locatorStr)
+      ? locatorStr
+      : "ws://" + locatorStr + "/" + wsSuffix;
+
     // Connect
-    const connOk = await this._wsConnect("ws://" + locator + "/" + wsSuffix);
+    const connOk = await this._wsConnect(wsURL);
     return connOk;
   }
 
@@ -91,6 +101,7 @@ export default class RaftChannelWebSocket implements RaftChannel {
     
     // Not connected
     this._isConnected = false;
+    this._connectedLocator = "";
     
     // Disconnect websocket
     this._webSocket?.close(1000);
@@ -189,6 +200,7 @@ export default class RaftChannelWebSocket implements RaftChannel {
       reject: (reason?: unknown) => void) => {
       this._webSocketOpen(wsURL).then((ws) => {
         this._webSocket = ws;
+        this._connectedLocator = wsURL;
         RaftLog.debug(`_wsConnect - opened connection`);
 
         // Handle messages
@@ -205,6 +217,7 @@ export default class RaftChannelWebSocket implements RaftChannel {
           RaftLog.info(`_wsConnect - closed code ${evt.code} wasClean ${evt.wasClean} reason ${evt.reason}`);
           this._webSocket = null;
           this._isConnected = false;
+          this._connectedLocator = "";
 
           // Event handler
           if (this._onConnEvent) {
@@ -215,6 +228,7 @@ export default class RaftChannelWebSocket implements RaftChannel {
         // Resolve the promise - success
         resolve(true);
       }).catch((err: unknown) => {
+        this._connectedLocator = "";
         if (err instanceof Error) {
           RaftLog.verbose(`WS open failed ${err.toString()}`)
         }
