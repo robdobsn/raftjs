@@ -167,10 +167,17 @@ export default function Main() {
   // Probe firmware datalogging capability once per connection. Legacy firmware
   // doesn't implement `datalog?...` and will let the request time out, which
   // sendRICRESTMsg surfaces as { rslt: 'fail' }. We treat any non-'ok' as
-  // unsupported and hide the logging panels.
+  // unsupported and hide the logging panels. When the capability resolver
+  // already knows the endpoint is unsupported we skip the send entirely (avoids
+  // the msgTrackTimer retry/timeout spam on e.g. Marty).
   useEffect(() => {
     if (connectionStatus !== RaftConnEvent.CONN_CONNECTED) {
       setDatalogSupported(null);
+      return;
+    }
+    const systemUtils = connManager.getConnector().getRaftSystemUtils();
+    if (systemUtils.isCapabilitySupported('datalog') === false) {
+      setDatalogSupported(false);
       return;
     }
     let cancelled = false;
@@ -181,7 +188,9 @@ export default function Main() {
         );
         if (cancelled) return;
         const r = resp as any;
-        setDatalogSupported(r?.rslt === 'ok');
+        const ok = r?.rslt === 'ok';
+        systemUtils.recordCapabilityResult('datalog', ok);
+        setDatalogSupported(ok);
       } catch {
         if (!cancelled) setDatalogSupported(false);
       }
@@ -191,11 +200,17 @@ export default function Main() {
 
   // Probe firmware camera capability once per connection. Devices without the
   // Camera SysMod (or with it disabled) return a non-'ok' result, and all
-  // camera UI is hidden.
+  // camera UI is hidden. When the capability resolver already knows the endpoint
+  // is unsupported we skip the send entirely (avoids retry/timeout spam).
   useEffect(() => {
     if (connectionStatus !== RaftConnEvent.CONN_CONNECTED) {
       setCameraSupported(null);
       CameraFeedStore.getInstance().clear();
+      return;
+    }
+    const systemUtils = connManager.getConnector().getRaftSystemUtils();
+    if (systemUtils.isCapabilitySupported('camera') === false) {
+      setCameraSupported(false);
       return;
     }
     let cancelled = false;
@@ -206,6 +221,7 @@ export default function Main() {
         );
         if (cancelled) return;
         const r = resp as any;
+        systemUtils.recordCapabilityResult('camera', r?.rslt === 'ok');
         setCameraSupported(r?.rslt === 'ok' && (r?.ready ?? false));
       } catch {
         if (!cancelled) setCameraSupported(false);
