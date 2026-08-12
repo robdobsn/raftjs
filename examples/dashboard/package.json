@@ -5,7 +5,8 @@
   "scripts": {
     "start": "npm run clean && parcel build src/index.html && parcel src/index.html",
     "clean": "rimraf dist .parcel-cache",
-    "build": "npm run clean && parcel build src/index.html"
+    "build": "npm run clean && parcel build src/index.html",
+    "test:e2e:real-marty": "node tests/e2e/raftjs-real-marty.e2e.mjs"
   },
   "keywords": [],
   "author": "Rob Dobson",
@@ -20,6 +21,7 @@
     "console-browserify": "^1.2.0",
     "parcel": "^2.16.3",
     "process": "^0.11.10",
+    "puppeteer": "^24.42.0",
     "rimraf": "^6.0.1",
     "typescript": "^5.3.3",
     "util": "^0.12.5"

@@ -24,6 +24,13 @@ import SettingsManager from './SettingsManager';
 const sysTypeManager = RaftSysTypeManager.getInstance();
 const connManager = ConnManager.getInstance();
 
+// Expose the dashboard's real connection manager for opt-in hardware E2E tests.
+// The tests still drive the visible connection controls and browser chooser;
+// this hook only provides lifecycle observations and deterministic race gates.
+(window as unknown as {
+  __raftDashboardE2E?: { connManager: ConnManager };
+}).__raftDashboardE2E = { connManager };
+
 export default function Main() {
   const [connectionStatus, setConnectionStatus] = useState<RaftConnEvent>(
     RaftConnEvent.CONN_DISCONNECTED
