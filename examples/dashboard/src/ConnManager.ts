@@ -9,6 +9,8 @@ const settingsManager = SettingsManager.getInstance();
 
 sysTypeManager.addSystemType('Cog', () => new SystemTypeCog());
 sysTypeManager.addSystemType('Marty', () => new SystemTypeMarty());
+// Older Marty firmware reports SystemName "RIC"
+sysTypeManager.addSystemType('RIC', () => new SystemTypeMarty());
 sysTypeManager.addDefaultSystemType(() => new SystemTypeGeneric());
 
 export default class ConnManager {

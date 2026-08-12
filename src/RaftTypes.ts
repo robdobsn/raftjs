@@ -85,6 +85,13 @@ export type RaftPubTopicsResponse = RaftOKFail & {
   topics?: Array<RaftPubTopicRec>;
 };
 
+// Response from the firmware "caps" endpoint (RaftCore SysManager) - the
+// authoritative list of registered API endpoint names the device supports
+export type RaftCapabilitiesResponse = RaftOKFail & {
+  capsVersion?: number;
+  caps?: Array<string>;
+};
+
 export type RaftPublishFrameType = 'json' | 'binary' | 'unknown';
 
 export type RaftPublishFrameMeta = {

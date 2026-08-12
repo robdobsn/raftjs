@@ -1,5 +1,5 @@
 import { RaftSystemType } from "../../../../src/RaftSystemType";
-import { RaftLog, RaftSystemUtils, RaftOKFail, RaftConnEventFn, RaftEventFn, RaftPublishEvent, RaftPublishEventNames } from "../../../../src/main";
+import { RaftLog, RaftSystemUtils, RaftOKFail, RaftConnEventFn, RaftEventFn, RaftPublishEvent, RaftPublishEventNames, SystemCapabilities } from "../../../../src/main";
 import RICAddOnManager from "./RICAddOnManager";
 import RICCommsStats from "./RICCommsStats";
 import RICLEDPatternChecker from "./RICLEDPatternChecker";
@@ -11,10 +11,22 @@ export default class SystemTypeMarty implements RaftSystemType {
   defaultWiFiHostname = "Marty";
   firmwareDestName = "ricfw";
   normalFileDestName = "fs";
-  connectorOptions = {wsSuffix: "ws", bleConnItvlMs: 7.5, bleMaxWriteSize: 182};
+  connectorOptions = {wsSuffix: "ws", bleConnItvlMs: 7.5};
   BLEServiceUUIDs = ["aa76677e-9cfd-4626-a510-0d305be57c8d"];
   BLECmdUUID = "aa76677e-9cfd-4626-a510-0d305be57c8e";
   BLERespUUID = "aa76677e-9cfd-4626-a510-0d305be57c8f";
+
+  // Static capability table (Layer A). Older Marty firmware (e.g. v1.3.21) has
+  // no caps endpoint, so this omits "caps" - the resolver then skips the caps
+  // probe entirely and relies on this table + runtime discovery. Newer Marty
+  // builds that add datetime/pubtopics/devman (and caps) should add them here
+  // with a minVersion bracket once the introducing version is known.
+  capabilities: SystemCapabilities = {
+    endpoints: {
+      "filelist/local": true,
+    },
+    tuning: { bleMaxWriteSize: 182 },
+  };
 
   // LED Pattern checker
   private _ledPatternChecker: RICLEDPatternChecker = new RICLEDPatternChecker();

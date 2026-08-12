@@ -34,6 +34,7 @@ export * from './RaftPublish';
 export * from './RaftCameraFrame';
 export * from './RaftTypes';
 export * from './RaftSystemType';
+export * from './RaftCapabilities';
 export * from './RaftWifiTypes';
 export * from './RaftConnEvents';
 export * from './RaftUpdateEvents';

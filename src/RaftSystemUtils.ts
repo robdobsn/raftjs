@@ -15,6 +15,7 @@ import {
 } from "./RaftWifiTypes";
 import RaftLog from "./RaftLog";
 import RaftMsgHandler from "./RaftMsgHandler";
+import { RaftCapabilityResolver, SystemCapabilities } from "./RaftCapabilities";
 
 import {
   RaftFileList,
@@ -22,6 +23,7 @@ import {
   RaftOKFail,
   RaftPubTopicRec,
   RaftPubTopicsResponse,
+  RaftCapabilitiesResponse,
   RaftSubscriptionUpdateResponse,
   RaftSysModInfoBLEMan,
   RaftSystemInfo,
@@ -46,6 +48,10 @@ export default class RaftSystemUtils {
   // Publish topic index/name lookup tables (session scoped)
   private _pubTopicIdxToName: { [idx: number]: string } = {};
   private _pubTopicNameToIdx: { [name: string]: number } = {};
+
+  // Layered capability resolution (Layer A static table + Layer B runtime cache
+  // + Layer C firmware caps). Seeded at connect, cleared on disconnect.
+  private _capabilityResolver = new RaftCapabilityResolver();
 
   /**
    * constructor
@@ -95,9 +101,16 @@ export default class RaftSystemUtils {
    * Fetch publish topic map from firmware endpoint.
    */
   async refreshPublishTopicMap(): Promise<boolean> {
+    // Skip if the device is known not to support pubtopics (Layer A/B/C)
+    if (this.isCapabilitySupported("pubtopics") === false) {
+      return false;
+    }
     try {
       const pubTopicsResp = await this._msgHandler.sendRICRESTURL<RaftPubTopicsResponse>("pubtopics");
-      if (pubTopicsResp && pubTopicsResp.rslt === "ok") {
+      const ok = !!(pubTopicsResp && pubTopicsResp.rslt === "ok");
+      // Learn the result at runtime (Layer B) - helps Generic/unknown devices
+      this._capabilityResolver.recordResult("pubtopics", ok);
+      if (ok) {
         this.updatePublishTopicMap(pubTopicsResp.topics);
         return true;
       }
@@ -105,6 +118,78 @@ export default class RaftSystemUtils {
       RaftLog.debug(`refreshPublishTopicMap failed ${error}`);
     }
     return false;
+  }
+
+  /**
+   * Seed the capability resolver from the system type's static table (Layer A)
+   * and the firmware version. Call once the system type and system info are
+   * known (i.e. after getSystemInfo), before refreshCapabilities.
+   */
+  seedCapabilities(capabilities: SystemCapabilities | undefined, systemVersion: string): void {
+    this._capabilityResolver.seed(capabilities, systemVersion);
+  }
+
+  /**
+   * Resolve device capabilities at connect. Consults the static table to decide
+   * whether to call the firmware "caps" endpoint at all:
+   * - a type/version known not to have caps (e.g. old Marty) skips the probe and
+   *   relies on the static table + runtime discovery;
+   * - otherwise "caps" is queried and, when present, becomes authoritative
+   *   (Layer C). When absent (older firmware) callers fall back to Layers A + B.
+   * @returns Promise<boolean> true if an authoritative caps list was obtained
+   */
+  async refreshCapabilities(): Promise<boolean> {
+    if (!this._capabilityResolver.shouldQueryCaps()) {
+      RaftLog.info("refreshCapabilities skipping caps query (static table: unsupported for this version)");
+      this._capabilityResolver.setCapsResult(null);
+      return false;
+    }
+    try {
+      const capsResp = await this._msgHandler.sendRICRESTURL<RaftCapabilitiesResponse>("caps");
+      if (capsResp && capsResp.rslt === "ok" && Array.isArray(capsResp.caps)) {
+        this._capabilityResolver.setCapsResult(capsResp.caps);
+        RaftLog.info(`refreshCapabilities got ${capsResp.caps.length} capabilities (capsVersion ${capsResp.capsVersion ?? "?"})`);
+        return true;
+      }
+      RaftLog.debug("refreshCapabilities device has no caps endpoint - using static table + runtime discovery");
+    } catch (error) {
+      RaftLog.debug(`refreshCapabilities failed ${error}`);
+    }
+    this._capabilityResolver.setCapsResult(null);
+    return false;
+  }
+
+  /**
+   * Query whether the device supports a given gated endpoint.
+   * @param name - the gated endpoint key (e.g. "datetime", "devman/typeinfo")
+   * @returns true/false when a verdict is known (from caps, runtime cache or the
+   *          static table), or undefined when unknown - callers should then fall
+   *          back to their existing behaviour (send once).
+   */
+  isCapabilitySupported(name: string): boolean | undefined {
+    return this._capabilityResolver.isSupported(name);
+  }
+
+  /**
+   * Record the outcome of sending a gated endpoint (Layer B runtime discovery).
+   */
+  recordCapabilityResult(name: string, supported: boolean): void {
+    this._capabilityResolver.recordResult(name, supported);
+  }
+
+  /**
+   * Resolve the BLE max write size for the connected system type/version from
+   * the capability table's tuning, or undefined if the type declares none.
+   */
+  getBleMaxWriteSize(): number | undefined {
+    return this._capabilityResolver.bleMaxWriteSize();
+  }
+
+  /**
+   * Reset session-scoped capability state (call on disconnect).
+   */
+  resetCapabilities(): void {
+    this._capabilityResolver.reset();
   }
 
   getPublishTopicName(topicIndex: number): string | undefined {

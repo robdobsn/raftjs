@@ -364,14 +364,18 @@ export default class RaftConnector {
         this._systemType.setup(this._raftSystemUtils, this._onEventFn);
       }
 
+      // Resolve capabilities. Seed the resolver from the system type's static
+      // table (Layer A) + firmware version (from the always-present "v" info),
+      // then decide whether to call "caps": known-unsupported types skip it and
+      // rely on the static table + runtime discovery; others query it (Layer C).
+      const sysInfo = await this._raftSystemUtils.getSystemInfo();
+      this._raftSystemUtils.seedCapabilities(this._systemType?.capabilities, sysInfo.SystemVersion);
+      await this._raftSystemUtils.refreshCapabilities();
+
       // Apply per-system-type BLE write size now the type is known (the channel
-      // connected before this point using the conservative default).
-      const bleMaxWriteSize = this._systemType?.connectorOptions?.bleMaxWriteSize;
-      if (bleMaxWriteSize !== undefined && this._raftChannel &&
-        typeof (this._raftChannel as { setMaxWriteSize?: unknown }).setMaxWriteSize === "function") {
-        RaftLog.info(`connect applying bleMaxWriteSize ${bleMaxWriteSize} for system type ${this._systemType?.nameForDialogs ?? "unknown"}`);
-        (this._raftChannel as unknown as { setMaxWriteSize: (bytes: number) => void }).setMaxWriteSize(bleMaxWriteSize);
-      }
+      // connected before this point using the conservative default). The value
+      // comes from the capability table's tuning (capabilities.tuning).
+      this._applyResolvedBleMaxWriteSize();
 
       // Check if subscription required
       if (this._systemType &&
@@ -391,7 +395,7 @@ export default class RaftConnector {
 
       // Sync time to device if enabled (default: true)
       const syncTime = this._systemType?.connectorOptions?.syncTimeOnConnect ?? true;
-      if (syncTime) {
+      if (syncTime && this._raftSystemUtils.isCapabilitySupported('datetime') !== false) {
         try {
           const now = new Date();
           const utc = now.toISOString().replace(/\.\d{3}Z$/, 'Z');
@@ -463,6 +467,7 @@ export default class RaftConnector {
           await channelToDisconnect.disconnect();
         } finally {
           this._disconnectingChannels.delete(channelToDisconnect);
+          this._raftSystemUtils.resetCapabilities();
         }
       }
     }
@@ -1049,6 +1054,20 @@ export default class RaftConnector {
   }
 
   /**
+   * Apply the BLE max write size resolved from the connected system type's
+   * capability tuning. No-op if the type declares none or the channel does not
+   * support chunked writes.
+   */
+  private _applyResolvedBleMaxWriteSize(): void {
+    const bleMaxWriteSize = this._raftSystemUtils.getBleMaxWriteSize();
+    if (bleMaxWriteSize !== undefined && this._raftChannel &&
+      typeof (this._raftChannel as { setMaxWriteSize?: unknown }).setMaxWriteSize === "function") {
+      RaftLog.info(`connect applying bleMaxWriteSize ${bleMaxWriteSize} for system type ${this._systemType?.nameForDialogs ?? "unknown"}`);
+      (this._raftChannel as unknown as { setMaxWriteSize: (bytes: number) => void }).setMaxWriteSize(bleMaxWriteSize);
+    }
+  }
+
+  /**
    * Re-establish session state after a channel-only reconnect. The peer wipes
    * subscriptions on reboot, so a bare channel reconnect resumes the link but
    * not device data unless we re-subscribe here.
@@ -1057,6 +1076,9 @@ export default class RaftConnector {
     if (!this._raftChannel) {
       return;
     }
+    // Re-apply the resolved BLE write size - a fresh channel connect resets to
+    // the conservative default.
+    this._applyResolvedBleMaxWriteSize();
     if (this._systemType &&
       this._systemType.subscribeForUpdates &&
       this._raftChannel.requiresSubscription()) {

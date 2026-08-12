@@ -1,5 +1,5 @@
 import { RaftSubscribeForUpdatesCBType, RaftSystemType } from "../../../../src/RaftSystemType";
-import { inspectPublishFrame, decodeCameraFramePublishMsg, RaftEventFn, RaftLog, RaftPublishEvent, RaftPublishEventNames, RaftSubscriptionUpdateResponse, RaftSystemUtils } from "../../../../src/main";
+import { inspectPublishFrame, decodeCameraFramePublishMsg, RaftEventFn, RaftLog, RaftPublishEvent, RaftPublishEventNames, RaftSubscriptionUpdateResponse, RaftSystemUtils, SystemCapabilities } from "../../../../src/main";
 import { StateInfoGeneric } from "./StateInfoGeneric";
 import { DeviceManager } from "../../../../src/RaftDeviceManager";
 
@@ -10,10 +10,17 @@ export default class SystemTypeGeneric implements RaftSystemType {
     defaultWiFiHostname = "Generic";
     firmwareDestName = "ricfw";
     normalFileDestName = "fs";
-    connectorOptions = {wsSuffix: "wsjson", bleConnItvlMs: 50, bleMaxWriteSize: 244};
+    connectorOptions = {wsSuffix: "wsjson", bleConnItvlMs: 50};
     BLEServiceUUIDs = ["aa76677e-9cfd-4626-a510-0d305be57c8d", "da903f65-d5c2-4f4d-a065-d1aade7af874"];
     BLECmdUUID = "aa76677e-9cfd-4626-a510-0d305be57c8e";
     BLERespUUID = "aa76677e-9cfd-4626-a510-0d305be57c8f";
+
+    // No static endpoint table - every gated call is discovered at runtime
+    // (Layer B). Only tuning is declared, so BLE write size is set while endpoint
+    // support stays fully dynamic.
+    capabilities: SystemCapabilities = {
+      tuning: { bleMaxWriteSize: 244 },
+    };
 
     // Event handler
     private _onEvent: RaftEventFn | null = null;

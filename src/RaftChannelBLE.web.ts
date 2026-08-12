@@ -396,9 +396,6 @@ export default class RaftChannelBLE implements RaftChannel {
 
   // Connect to a device
   async connect(locator: string | object, _connectorOptions: ConnectorOptions): Promise<boolean> {
-    if (_connectorOptions.bleMaxWriteSize !== undefined) {
-      this.setMaxWriteSize(_connectorOptions.bleMaxWriteSize);
-    }
     this.clearRxListener();
     if (this._eventListenerFn && this._bleDevice) {
       this._bleDevice.removeEventListener(

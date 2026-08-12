@@ -1,5 +1,5 @@
 import { RaftSubscribeForUpdatesCBType, RaftSystemType } from "../../../../src/RaftSystemType";
-import { inspectPublishFrame, RaftEventFn, RaftLog, RaftPublishEvent, RaftPublishEventNames, RaftSubscriptionUpdateResponse, RaftSystemUtils } from "../../../../src/main";
+import { inspectPublishFrame, RaftEventFn, RaftLog, RaftPublishEvent, RaftPublishEventNames, RaftSubscriptionUpdateResponse, RaftSystemUtils, SystemCapabilities } from "../../../../src/main";
 import { CogStateInfo } from "./CogStateInfo";
 import { DeviceManager } from "../../../../src/RaftDeviceManager";
 
@@ -10,10 +10,24 @@ export default class SystemTypeCog implements RaftSystemType {
     defaultWiFiHostname = "Cog";
     firmwareDestName = "ricfw";
     normalFileDestName = "fs";
-    connectorOptions = {wsSuffix: "wsjson", bleConnItvlMs: 50, bleMaxWriteSize: 244};
+    connectorOptions = {wsSuffix: "wsjson", bleConnItvlMs: 50};
     BLEServiceUUIDs = ["da903f65-d5c2-4f4d-a065-d1aade7af874"];
     BLECmdUUID = "aa76677e-9cfd-4626-a510-0d305be57c8e";
     BLERespUUID = "aa76677e-9cfd-4626-a510-0d305be57c8f";
+
+    // Static capability table (Layer A). Current Cog firmware supports the caps
+    // endpoint, so this is mainly a fallback if caps is ever unavailable; when
+    // caps responds it is authoritative (Layer C).
+    capabilities: SystemCapabilities = {
+      endpoints: {
+        "caps": true,
+        "pubtopics": true,
+        "datetime": true,
+        "devman/typeinfo": true,
+        "bledisconnect": true,
+      },
+      tuning: { bleMaxWriteSize: 244 },
+    };
 
     // Event handler
     private _onEvent: RaftEventFn | null = null;
