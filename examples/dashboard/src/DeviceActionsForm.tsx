@@ -72,8 +72,12 @@ const DeviceActionsForm: React.FC<DeviceActionsTableProps> = ({ deviceKey }: Dev
                 return acc;
             }, {} as InputValues);
 
-            // Query current poll config from firmware to initialize rate dropdowns
-            if (isBus && deviceState?.deviceAddress) {
+            // Query current poll config from firmware to initialize rate dropdowns.
+            // Skip on firmware known not to support the newer devman API (devconfig
+            // is a sibling of devman/typeinfo) to avoid a failUnknownCmd.
+            const systemUtils = connManager.getConnector().getRaftSystemUtils();
+            const devmanSupported = systemUtils.isCapabilitySupported('devman/typeinfo') !== false;
+            if (isBus && deviceState?.deviceAddress && devmanSupported) {
                 try {
                     const cmd = `devman/devconfig?bus=${busName}&addr=${deviceState.deviceAddress}`;
                     const resp = await connManager.getConnector().sendRICRESTMsg(cmd, {}) as any;

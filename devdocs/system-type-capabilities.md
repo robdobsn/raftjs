@@ -283,11 +283,23 @@ does) and remain fully dynamic for endpoint support.
 
 ## Version handling
 
-- Parse the leading `major.minor.patch` from `SystemVersion`; ignore any
-  `-<n>-g<hash>-dirty` suffix (e.g. `1.9.5-5-g3af7a0a-dirty` → `1.9.5`).
+- Parse `major.minor.patch` from `SystemVersion`, plus the git-describe
+  "commits since tag" count as a 4th ordinal, so a dev build sorts **after** its
+  base tag: `1.9.5-6-g367562d` → `[1,9,5,6]` > `1.9.5` → `[1,9,5,0]`. A trailing
+  `-dirty` (or any non `-<n>-g<hash>` suffix) is ignored.
 - Comparator supports `minVersion` (inclusive) / `maxVersion` (exclusive) and
   ordered range lists. Keep it a small local helper; do not add a semver
   dependency for this.
+
+> **Distinguishing pre-release dev builds from a release tag.** Because the
+> commit count is ordered, a `minVersion` of `1.9.5-1` (≥ 1 commit past the
+> `1.9.5` tag) matches current dev builds (`1.9.5-6-g…`) **and** any future
+> release (`1.9.6`, `1.10.0`, …) but **not** the plain `1.9.5` release. Verified
+> on Cog: v1.9.5 lacks `caps`/`pubtopics`/`datetime`/`devman/typeinfo`; the dev
+> build (`1.9.5-6`) has them. The Cog table therefore version-gates those (and
+> `caps` itself) at `minVersion: "1.9.5-1"`, so on 1.9.5 the caps probe is
+> skipped and the gated endpoints are not sent, while newer firmware queries caps
+> and uses it as authoritative.
 
 ## Enforcement point
 

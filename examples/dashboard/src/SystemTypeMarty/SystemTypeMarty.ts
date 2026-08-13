@@ -76,23 +76,21 @@ export default class SystemTypeMarty implements RaftSystemType {
     // Subscription rate
     const subscribeRateHz = 10;
     try {
-      const subscribeDisable = '{"cmdName":"subscription","action":"update",' +
-        '"pubRecs":[' +
-        `{"name":"MultiStatus","rateHz":0,}` +
-        '{"name":"PowerStatus","rateHz":0},' +
-        `{"name":"AddOnStatus","rateHz":0}` +
-        ']}';
-      const subscribeEnable = '{"cmdName":"subscription","action":"update",' +
-        '"pubRecs":[' +
-        `{"name":"MultiStatus","rateHz":${subscribeRateHz.toString()}}` +
-        `{"name":"PowerStatus","rateHz":1.0},` +
-        `{"name":"AddOnStatus","rateHz":${subscribeRateHz.toString()}}` +
-        ']}';
+      const pubRecs = enable
+        ? [
+            { name: "MultiStatus", rateHz: subscribeRateHz },
+            { name: "PowerStatus", rateHz: 1.0 },
+            { name: "AddOnStatus", rateHz: subscribeRateHz },
+          ]
+        : [
+            { name: "MultiStatus", rateHz: 0 },
+            { name: "PowerStatus", rateHz: 0 },
+            { name: "AddOnStatus", rateHz: 0 },
+          ];
+      const subscribeMsg = JSON.stringify({ cmdName: "subscription", action: "update", pubRecs });
 
       const msgHandler = systemUtils.getMsgHandler();
-      const ricResp = await msgHandler.sendRICRESTCmdFrame<RaftOKFail>(
-        enable ? subscribeEnable : subscribeDisable
-      );
+      const ricResp = await msgHandler.sendRICRESTCmdFrame<RaftOKFail>(subscribeMsg);
 
       // Debug
       RaftLog.debug(`subscribe enable/disable returned ${JSON.stringify(ricResp)}`);

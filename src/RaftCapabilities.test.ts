@@ -9,15 +9,18 @@ import {
 // ===== Version helpers =====
 
 describe("parseVersionLite", () => {
-  test("full version with build suffix", () => {
-    expect(parseVersionLite("1.9.5-6-g367562d-dirty")).toEqual([1, 9, 5]);
+  test("full version with git-describe commit count", () => {
+    expect(parseVersionLite("1.9.5-6-g367562d-dirty")).toEqual([1, 9, 5, 6]);
   });
   test("v prefix and missing parts", () => {
-    expect(parseVersionLite("v2.1")).toEqual([2, 1, 0]);
+    expect(parseVersionLite("v2.1")).toEqual([2, 1, 0, 0]);
+  });
+  test("plain release has zero commit count", () => {
+    expect(parseVersionLite("1.9.5")).toEqual([1, 9, 5, 0]);
   });
   test("empty/garbage -> zeros", () => {
-    expect(parseVersionLite("")).toEqual([0, 0, 0]);
-    expect(parseVersionLite("unknown")).toEqual([0, 0, 0]);
+    expect(parseVersionLite("")).toEqual([0, 0, 0, 0]);
+    expect(parseVersionLite("unknown")).toEqual([0, 0, 0, 0]);
   });
 });
 
@@ -27,8 +30,11 @@ describe("compareVersionLite", () => {
     expect(compareVersionLite("1.3.0", "1.2.9")).toBeGreaterThan(0);
     expect(compareVersionLite("1.2.3", "1.2.3")).toBe(0);
   });
-  test("ignores suffix", () => {
-    expect(compareVersionLite("1.9.5-6-gabc", "1.9.5")).toBe(0);
+  test("git-describe build sorts after its base tag", () => {
+    expect(compareVersionLite("1.9.5-6-gabc", "1.9.5")).toBeGreaterThan(0);
+    expect(compareVersionLite("1.9.5", "1.9.5-6-gabc")).toBeLessThan(0);
+    expect(compareVersionLite("1.9.5-2-gabc", "1.9.5-6-gabc")).toBeLessThan(0);
+    expect(compareVersionLite("1.9.6", "1.9.5-6-gabc")).toBeGreaterThan(0);
   });
 });
 
@@ -38,6 +44,11 @@ describe("versionInRange", () => {
     expect(versionInRange("1.4.9", { minVersion: "1.5.0" })).toBe(false);
     expect(versionInRange("2.0.0", { maxVersion: "2.0.0" })).toBe(false);
     expect(versionInRange("1.9.9", { maxVersion: "2.0.0" })).toBe(true);
+  });
+  test("1.9.5-1 bracket excludes the 1.9.5 release, includes dev builds and later", () => {
+    expect(versionInRange("1.9.5", { minVersion: "1.9.5-1" })).toBe(false);
+    expect(versionInRange("1.9.5-6-g367562d", { minVersion: "1.9.5-1" })).toBe(true);
+    expect(versionInRange("1.9.6", { minVersion: "1.9.5-1" })).toBe(true);
   });
 });
 

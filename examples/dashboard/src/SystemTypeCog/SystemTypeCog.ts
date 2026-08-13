@@ -15,16 +15,20 @@ export default class SystemTypeCog implements RaftSystemType {
     BLECmdUUID = "aa76677e-9cfd-4626-a510-0d305be57c8e";
     BLERespUUID = "aa76677e-9cfd-4626-a510-0d305be57c8f";
 
-    // Static capability table (Layer A). Current Cog firmware supports the caps
-    // endpoint, so this is mainly a fallback if caps is ever unavailable; when
-    // caps responds it is authoritative (Layer C).
+    // Static capability table (Layer A). The gated endpoints (including caps
+    // itself) were added after the 1.9.5 release. The git-describe commit count
+    // orders "1.9.5-6-g..." *after* "1.9.5", so a minVersion of "1.9.5-1"
+    // (>= 1 commit past the 1.9.5 tag) matches current dev builds and future
+    // releases but not the plain 1.9.5 release, which lacks them. On 1.9.5 the
+    // caps probe is skipped and the gated endpoints are not sent; on newer
+    // firmware caps is queried and becomes authoritative (Layer C).
     capabilities: SystemCapabilities = {
       endpoints: {
-        "caps": true,
-        "pubtopics": true,
-        "datetime": true,
-        "devman/typeinfo": true,
-        "bledisconnect": true,
+        "caps": { minVersion: "1.9.5-1" },
+        "pubtopics": { minVersion: "1.9.5-1" },
+        "datetime": { minVersion: "1.9.5-1" },
+        "devman/typeinfo": { minVersion: "1.9.5-1" },
+        "bledisconnect": { minVersion: "1.9.5-1" },
       },
       tuning: { bleMaxWriteSize: 244 },
     };

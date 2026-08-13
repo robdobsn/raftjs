@@ -63,21 +63,28 @@ function baseEndpoint(endpoint: string): string {
   return slash < 0 ? endpoint : endpoint.substring(0, slash);
 }
 
-// Parse the leading major.minor.patch from a version string, ignoring any
-// build/suffix (e.g. "1.9.5-6-g367562d-dirty" -> [1,9,5], "v2.1" -> [2,1,0]).
-export function parseVersionLite(version: string): [number, number, number] {
-  const m = /^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?/.exec(version ?? "");
+// Parse a version string into an ordered tuple [major, minor, patch, commits].
+// The 4th element is the git-describe "commits since tag" count, so a dev build
+// sorts *after* its base tag: "1.9.5-6-g367562d" -> [1,9,5,6] > "1.9.5" ->
+// [1,9,5,0]. A trailing "-dirty" (or any non "-<n>-g<hash>" suffix) is ignored.
+export function parseVersionLite(version: string): [number, number, number, number] {
+  const m = /^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:-(\d+)(?:-g[0-9a-f]+)?)?/i.exec(version ?? "");
   if (!m) {
-    return [0, 0, 0];
+    return [0, 0, 0, 0];
   }
-  return [parseInt(m[1] ?? "0", 10), parseInt(m[2] ?? "0", 10), parseInt(m[3] ?? "0", 10)];
+  return [
+    parseInt(m[1] ?? "0", 10),
+    parseInt(m[2] ?? "0", 10),
+    parseInt(m[3] ?? "0", 10),
+    parseInt(m[4] ?? "0", 10),
+  ];
 }
 
 // Compare two version-lite strings: negative if a<b, 0 if equal, positive if a>b.
 export function compareVersionLite(a: string, b: string): number {
   const va = parseVersionLite(a);
   const vb = parseVersionLite(b);
-  for (let i = 0; i < 3; i++) {
+  for (let i = 0; i < 4; i++) {
     if (va[i] !== vb[i]) {
       return va[i] - vb[i];
     }
