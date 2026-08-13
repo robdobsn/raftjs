@@ -157,6 +157,73 @@ describe("RaftConnector reconnect deadline", () => {
       event === RaftConnEvent.CONN_DISCONNECTED
     )).toHaveLength(2);
   });
+
+  it("does not emit issue resolved when disconnect starts during reconnect restoration", async () => {
+    const channel = makeChannel(async () => true);
+    (channel as unknown as { requiresSubscription: () => boolean }).requiresSubscription = () => true;
+    const connector = new RaftConnector();
+    const onEvent = jest.fn();
+    connector.setEventListener(onEvent);
+    configureRetry(connector, channel, 60);
+
+    // System type whose re-subscription hangs until we release it, simulating
+    // an explicit disconnect arriving mid-restoration.
+    const subscribeGate = deferred<void>();
+    (connector as unknown as { _systemType: object })._systemType = {
+      subscribeForUpdates: jest.fn(() => subscribeGate.promise),
+    };
+
+    connector.onConnEvent(RaftConnEvent.CONN_DISCONNECTED);
+    await jest.advanceTimersByTimeAsync(10);
+
+    // Restoration is now awaited; explicit disconnect takes ownership.
+    const connectorState = connector as unknown as {
+      _raftChannel: RaftChannel | null;
+      _retryIfLostGeneration: number;
+      _retryIfLostIsConnected: boolean;
+    };
+    connectorState._raftChannel = null;
+    connectorState._retryIfLostGeneration++;
+    connectorState._retryIfLostIsConnected = false;
+
+    subscribeGate.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(onEvent.mock.calls.filter(([, event]) =>
+      event === RaftConnEvent.CONN_ISSUE_RESOLVED
+    )).toHaveLength(0);
+    expect(onEvent.mock.calls.filter(([, event]) =>
+      event === RaftConnEvent.CONN_RECOVERY_DEGRADED
+    )).toHaveLength(0);
+  });
+
+  it("emits recovery degraded when reconnect subscription restoration fails", async () => {
+    const channel = makeChannel(async () => true);
+    (channel as unknown as { requiresSubscription: () => boolean }).requiresSubscription = () => true;
+    const connector = new RaftConnector();
+    const onEvent = jest.fn();
+    connector.setEventListener(onEvent);
+    configureRetry(connector, channel, 60);
+
+    (connector as unknown as { _systemType: object })._systemType = {
+      subscribeForUpdates: jest.fn(async () => {
+        throw new Error("Injected reconnect subscription failure");
+      }),
+    };
+
+    connector.onConnEvent(RaftConnEvent.CONN_DISCONNECTED);
+    await jest.advanceTimersByTimeAsync(10);
+
+    expect(onEvent.mock.calls.filter(([, event]) =>
+      event === RaftConnEvent.CONN_ISSUE_RESOLVED
+    )).toHaveLength(0);
+    expect(onEvent.mock.calls.filter(([, event]) =>
+      event === RaftConnEvent.CONN_RECOVERY_DEGRADED
+    )).toHaveLength(1);
+    expect(connector.isConnected()).toBe(true);
+  });
 });
 
 describe("RaftConnector terminal disconnect", () => {

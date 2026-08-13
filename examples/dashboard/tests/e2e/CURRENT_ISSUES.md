@@ -108,9 +108,9 @@ and the connector remained cleanly disconnected.
 
 ## 3. Reconnect emits `ISSUE_RESOLVED` after explicit disconnect begins
 
-- **Status:** Open
+- **Status:** Fixed (validated on real hardware)
 - **Evidence:** Real hardware with deterministic timing gate
-- **Scenario:** `marty-reconnect-disconnect-race`
+- **Scenario:** `marty-reconnect-disconnect-race` (assertions inverted to validate the fix)
 
 ### Observed behaviour
 
@@ -146,11 +146,20 @@ or terminal disconnect state.
 After every awaited reconnect-restoration step, revalidate the retry generation
 and channel ownership before changing state or emitting `ISSUE_RESOLVED`.
 
+### Resolution
+
+The retry loop captures the post-reconnect generation and, after awaiting
+`_reestablishAfterReconnect()`, revalidates the generation, channel presence and
+connected state before emitting any recovery event; if an explicit disconnect
+(or a newer connect) intervened it returns silently. Validated on a physical
+Marty: no recovery events after disconnect began and the connector remained
+disconnected.
+
 ## 4. Subscription restoration failure still reports recovery
 
-- **Status:** Open
+- **Status:** Fixed (validated on real hardware)
 - **Evidence:** Real hardware with injected reconnect failure
-- **Scenario:** `marty-subscribe-failure-resolved`
+- **Scenario:** `marty-subscribe-failure-resolved` (assertions inverted to validate the fix)
 
 ### Observed behaviour
 
@@ -173,6 +182,16 @@ errors internally, so failures may be hidden before RaftConnector can respond.
 Subscription restoration should return a meaningful result or propagate
 failure. RaftConnector should emit `ISSUE_RESOLVED` only after required session
 state is restored, or emit a distinct degraded-recovery event.
+
+### Resolution
+
+`_reestablishAfterReconnect()` now returns success/failure. On failure the
+connector emits a new `CONN_RECOVERY_DEGRADED` event (name `RECOVERY_DEGRADED`)
+instead of `ISSUE_RESOLVED`; the transport stays connected. The event was
+appended at the end of `RaftConnEvent` so existing numeric values do not shift.
+**Consumer note:** apps that treat `ISSUE_RESOLVED` as full recovery should also
+handle `RECOVERY_DEGRADED` (e.g. retry subscriptions, warn, or disconnect).
+Validated on a physical Marty with an injected subscription failure.
 
 ## 5. An obsolete WebSocket can clear a newer socket's state
 
@@ -243,8 +262,8 @@ defined before deciding which setup operations need to be replayed.
 |---|---|---|---|
 | `marty-ble-write-size` | WebBLE | Physical Marty | Fixed - validated |
 | `marty-connect-disconnect-race` | WebBLE | Physical Marty | Fixed - validated |
-| `marty-reconnect-disconnect-race` | WebBLE | Physical Marty | Reproduced |
-| `marty-subscribe-failure-resolved` | WebBLE | Physical Marty | Reproduced |
+| `marty-reconnect-disconnect-race` | WebBLE | Physical Marty | Fixed - validated |
+| `marty-subscribe-failure-resolved` | WebBLE | Physical Marty | Fixed - validated |
 | `marty-websocket-stale-close` | WebSocket | Reachable Marty required | Implemented, not run on hardware |
 
 ## Verification baseline

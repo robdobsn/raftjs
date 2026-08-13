@@ -1017,15 +1017,31 @@ export default class RaftConnector {
 
         this._retryIfLostDisconnectTime = null;
         this._retryIfLostIsConnected = true;
-        this._retryIfLostGeneration++;
+        const restoredGeneration = ++this._retryIfLostGeneration;
 
         // Channel is back. Re-establish system subscriptions, which the peer
         // drops on reboot, without the full connect() path (avoids re-running
         // system-type setup, e.g. Marty LED verify).
-        await this._reestablishAfterReconnect();
+        const restoredOk = await this._reestablishAfterReconnect();
+
+        // An explicit disconnect (or a newer connect/retry) may have started
+        // while restoration was awaited - it bumps the generation and removes
+        // the channel. Do not report recovery for a connection that is being
+        // torn down.
+        if (restoredGeneration !== this._retryIfLostGeneration ||
+          !this._raftChannel || !this._retryIfLostIsConnected) {
+          RaftLog.info('reconnect superseded or disconnected during restoration - not emitting recovery');
+          return;
+        }
 
         if (this._onEventFn) {
-          this._onEventFn("conn", RaftConnEvent.CONN_ISSUE_RESOLVED, RaftConnEventNames[RaftConnEvent.CONN_ISSUE_RESOLVED]);
+          if (restoredOk) {
+            this._onEventFn("conn", RaftConnEvent.CONN_ISSUE_RESOLVED, RaftConnEventNames[RaftConnEvent.CONN_ISSUE_RESOLVED]);
+          } else {
+            // Transport is back but session state (subscriptions) was not
+            // restored - report degraded recovery, not full resolution.
+            this._onEventFn("conn", RaftConnEvent.CONN_RECOVERY_DEGRADED, RaftConnEventNames[RaftConnEvent.CONN_RECOVERY_DEGRADED]);
+          }
         }
         return;
       }
@@ -1102,10 +1118,11 @@ export default class RaftConnector {
    * Re-establish session state after a channel-only reconnect. The peer wipes
    * subscriptions on reboot, so a bare channel reconnect resumes the link but
    * not device data unless we re-subscribe here.
+   * @returns true if required session state was restored (or none was needed)
    */
-  private async _reestablishAfterReconnect(): Promise<void> {
+  private async _reestablishAfterReconnect(): Promise<boolean> {
     if (!this._raftChannel) {
-      return;
+      return false;
     }
     // Re-apply the resolved BLE write size - a fresh channel connect resets to
     // the conservative default.
@@ -1118,8 +1135,10 @@ export default class RaftConnector {
         RaftLog.info(`reconnect re-subscribed for updates`);
       } catch (error: unknown) {
         RaftLog.warn(`reconnect re-subscribe for updates failed ${error}`);
+        return false;
       }
     }
+    return true;
   }
 
   // Mark: OTA Update -----------------------------------------------------------------------------------------

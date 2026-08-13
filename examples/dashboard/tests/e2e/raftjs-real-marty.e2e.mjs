@@ -845,24 +845,28 @@ async function scenarioReconnectDisconnectRace(page, details) {
     );
     details.afterDisconnectStarted = await reconnectProbeSnapshot(page);
     await page.evaluate(() => window.__raftReconnectProbe.release());
-    await page.waitForFunction(
-      () =>
-        window.__raftReconnectProbe?.events.some((event) =>
-          /ISSUE_RESOLVED/.test(String(event.eventName || ""))
-        ),
-      { timeout: CONNECT_TIMEOUT_MS, polling: 20 }
-    );
     await waitForDashboardDisconnected(page);
+    // Allow any stale late emit to surface before asserting silence.
+    await new Promise((resolve) => setTimeout(resolve, 3000));
     details.final = await reconnectProbeSnapshot(page);
-    const lateResolved = details.final.events.find(
+    // Fix validation (issue #3): the retry loop revalidates ownership after
+    // reconnect restoration, so no recovery event is emitted once an explicit
+    // disconnect has begun.
+    const lateRecovery = details.final.events.filter(
       (event) =>
-        /ISSUE_RESOLVED/.test(String(event.eventName || "")) &&
+        /ISSUE_RESOLVED|RECOVERY_DEGRADED/.test(String(event.eventName || "")) &&
         event.elapsedMs >= details.final.disconnectRequestedAtMs
     );
-    assert.ok(lateResolved, "ISSUE_RESOLVED was not emitted after disconnect began.");
+    assert.deepEqual(
+      lateRecovery,
+      [],
+      `Recovery events were emitted after disconnect began: ${JSON.stringify(lateRecovery)}`
+    );
+    assert.equal(details.final.connectorConnected, false);
+    assert.equal(details.final.channelPresent, false);
     console.log(
-      `[reproduced] ISSUE_RESOLVED at ${lateResolved.elapsedMs}ms after ` +
-        `disconnect began at ${details.final.disconnectRequestedAtMs}ms`
+      "[validated] no recovery events after disconnect began at " +
+        `${details.final.disconnectRequestedAtMs}ms; connector stayed disconnected.`
     );
   } finally {
     await restoreReconnectProbe(page).catch(() => {});
@@ -877,20 +881,23 @@ async function scenarioSubscriptionFailureResolved(page, details) {
       () =>
         window.__raftReconnectProbe?.failureCount > 0 &&
         window.__raftReconnectProbe?.events.some((event) =>
-          /ISSUE_RESOLVED/.test(String(event.eventName || ""))
+          /RECOVERY_DEGRADED/.test(String(event.eventName || ""))
         ),
       { timeout: CONNECT_TIMEOUT_MS, polling: 20 }
     );
     details.observation = await reconnectProbeSnapshot(page);
+    // Fix validation (issue #4): failed subscription restoration reports
+    // degraded recovery, never full resolution.
     assert.equal(details.observation.failureCount, 1);
     assert.equal(details.observation.connectorConnected, true);
     assert.ok(
-      details.observation.events.some((event) =>
+      !details.observation.events.some((event) =>
         /ISSUE_RESOLVED/.test(String(event.eventName || ""))
-      )
+      ),
+      "ISSUE_RESOLVED must not be emitted when subscription restoration failed."
     );
     console.log(
-      "[reproduced] Subscription failed, but ISSUE_RESOLVED was emitted."
+      "[validated] Subscription failure produced RECOVERY_DEGRADED, not ISSUE_RESOLVED."
     );
   } finally {
     await restoreReconnectProbe(page).catch(() => {});

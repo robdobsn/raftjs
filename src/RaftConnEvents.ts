@@ -28,6 +28,10 @@ export enum RaftConnEvent {
     BLE_DEVICE_FOUND,
     BLE_SCANNING_FINISHED,
     BLE_BLUETOOTH_STATE,
+
+    // Transport reconnected but session state (e.g. subscriptions) could not be
+    // restored. Appended at the end so existing numeric values do not shift.
+    CONN_RECOVERY_DEGRADED,
 }
 
 export const RaftConnEventNames = {
@@ -50,6 +54,8 @@ export const RaftConnEventNames = {
     [RaftConnEvent.BLE_DEVICE_FOUND]: 'BLE_DEVICE_FOUND',
     [RaftConnEvent.BLE_SCANNING_FINISHED]: 'BLE_SCANNING_FINISHED',
     [RaftConnEvent.BLE_BLUETOOTH_STATE]: 'BLE_BLUETOOTH_STATE',
+
+    [RaftConnEvent.CONN_RECOVERY_DEGRADED]: 'RECOVERY_DEGRADED',
 };
   
 export type RaftConnEventFn = (
