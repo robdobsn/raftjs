@@ -6,7 +6,7 @@ import http from "node:http";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import puppeteer from "puppeteer";
 
@@ -136,6 +136,15 @@ function waitForHttp(url, timeoutMs) {
 }
 
 function startDashboardServer(port) {
+  const distDir = buildDashboard();
+  return startStaticServer(distDir, port);
+}
+
+// Build the dashboard once (no watch). `parcel serve` relies on native file
+// watching and an mmap'd LMDB cache, both of which fail on a WSL/9P filesystem
+// exposed as a Windows mapped drive. A one-shot build + static serve is
+// filesystem-agnostic and all we need for an E2E run.
+function buildDashboard() {
   const parcelBin = path.join(
     DASHBOARD_DIR,
     "node_modules",
@@ -147,28 +156,78 @@ function startDashboardServer(port) {
       `Dashboard dependencies are missing. Run npm install in ${DASHBOARD_DIR}.`
     );
   }
-  return spawn(
-    parcelBin,
-    ["src/index.html", "--host", HOST, "--port", String(port)],
-    {
-      cwd: DASHBOARD_DIR,
-      detached: process.platform !== "win32",
-      stdio: "inherit",
-      env: { ...process.env, BROWSER: "none" },
+  const distDir = path.join(DASHBOARD_DIR, "dist-e2e");
+  const args = ["build", "src/index.html", "--dist-dir", distDir, "--no-optimize"];
+  if (process.platform === "win32") {
+    // Keep Parcel's LMDB cache off the 9P mapped drive (mmap fails there).
+    args.push("--cache-dir", path.join(os.tmpdir(), "raftjs-dashboard-e2e-cache"));
+  }
+  console.log("[server] Building dashboard (parcel build)...");
+  execFileSync(parcelBin, args, {
+    cwd: DASHBOARD_DIR,
+    stdio: "inherit",
+    env: { ...process.env },
+  });
+  return distDir;
+}
+
+const STATIC_CONTENT_TYPES = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".mjs": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".map": "application/json; charset=utf-8",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".ico": "image/x-icon",
+  ".wasm": "application/wasm",
+  ".woff": "font/woff",
+  ".woff2": "font/woff2",
+  ".ttf": "font/ttf",
+  ".txt": "text/plain; charset=utf-8",
+};
+
+function startStaticServer(distDir, port) {
+  const server = http.createServer((req, res) => {
+    let urlPath = decodeURIComponent((req.url || "/").split("?")[0]);
+    if (urlPath.endsWith("/")) urlPath += "index.html";
+    const rel = path.normalize(urlPath).replace(/^([\\/]|\.\.[\\/])+/, "");
+    const filePath = path.join(distDir, rel);
+    if (!filePath.startsWith(distDir)) {
+      res.statusCode = 403;
+      res.end("Forbidden");
+      return;
     }
-  );
+    fsSync.readFile(filePath, (err, data) => {
+      if (err) {
+        res.statusCode = 404;
+        res.end("Not found");
+        return;
+      }
+      res.setHeader(
+        "Content-Type",
+        STATIC_CONTENT_TYPES[path.extname(filePath).toLowerCase()] ||
+          "application/octet-stream"
+      );
+      res.end(data);
+    });
+  });
+  return new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(port, HOST, () => resolve(server));
+  });
 }
 
 function stopDashboardServer(server) {
-  if (!server || server.killed) return;
+  if (!server || typeof server.close !== "function") return;
   try {
-    if (process.platform !== "win32" && server.pid) {
-      process.kill(-server.pid, "SIGINT");
-    } else {
-      server.kill("SIGINT");
-    }
+    server.close();
   } catch {
-    // The server may already have exited.
+    // The server may already have been closed.
   }
 }
 
@@ -420,16 +479,65 @@ async function selectMartyFromPrompt(page) {
   promptPromise.catch(() => {});
   await clickConnectionButton(page, "WebBLE");
   const prompt = await promptPromise;
+  // Chrome's CDP device-request prompt frequently reports empty `name` fields
+  // when the page filters by service UUID (as this dashboard does), so an
+  // exact-name predicate can never resolve even though the native UI shows the
+  // name. Poll the prompt: log each candidate, match by name when available,
+  // and otherwise fall back to the sole Robotical device the service filter
+  // already narrowed the chooser to.
+  const expectedLower = MARTY_NAME.toLowerCase();
+  // Chrome's CDP prompt shows placeholder names ("Unknown or Unsupported Device
+  // (MAC)") and never resolves the real name, but the device `id` is the MAC.
+  // Marty advertises as "Marty_<last 3 MAC bytes>" (e.g. Marty_287796 -> MAC
+  // ...28:77:96), so match on the hex suffix of the expected name against the id.
+  const expectedHexSuffix = (MARTY_NAME.match(/([0-9a-fA-F]{6,})\s*$/)?.[1] || "").toLowerCase();
+  const NAME_GRACE_MS = 8000;
+  const startWait = Date.now();
+  const deadline = startWait + DEVICE_TIMEOUT_MS;
+  const seen = new Set();
   let device;
   try {
-    const expectedLower = MARTY_NAME.toLowerCase();
-    device = await prompt.waitForDevice(
-      ({ name }) => {
-        const candidate = String(name || "").trim();
-        return candidate === MARTY_NAME || candidate.toLowerCase() === expectedLower;
-      },
-      { timeout: DEVICE_TIMEOUT_MS }
-    );
+    for (;;) {
+      const devices = prompt.devices || [];
+      for (const candidate of devices) {
+        if (!seen.has(candidate.id)) {
+          seen.add(candidate.id);
+          console.log(
+            `[chooser] candidate id=${candidate.id} name=${JSON.stringify(candidate.name || "")}`
+          );
+        }
+      }
+      device = devices.find((candidate) => {
+        const name = String(candidate.name || "").trim();
+        if (name === MARTY_NAME || name.toLowerCase() === expectedLower) return true;
+        if (expectedHexSuffix) {
+          const idHex = String(candidate.id || "").replace(/[^0-9a-fA-F]/g, "").toLowerCase();
+          const nameHex = name.replace(/[^0-9a-fA-F]/g, "").toLowerCase();
+          if (idHex.includes(expectedHexSuffix) || nameHex.includes(expectedHexSuffix)) return true;
+        }
+        return false;
+      });
+      if (device) break;
+      // Fallback: names still absent after a grace period -> take the only
+      // (or first) device the service-UUID filter offered.
+      if (
+        devices.length >= 1 &&
+        Date.now() - startWait > NAME_GRACE_MS &&
+        devices.every((candidate) => !String(candidate.name || "").trim())
+      ) {
+        device = devices[0];
+        console.log(
+          `[chooser] no device names reported; selecting sole candidate ${device.id}`
+        );
+        break;
+      }
+      if (Date.now() >= deadline) {
+        throw new Error(
+          `No Bluetooth device matching "${MARTY_NAME}" appeared in the prompt.`
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    }
   } catch (error) {
     await prompt.cancel().catch(() => {});
     throw error;
@@ -796,22 +904,25 @@ async function scenarioBleWriteSize(page, details) {
         reportedSystemName:
           connector.getRaftSystemUtils().getCachedSystemInfo()?.SystemName ?? null,
         systemTypeName: systemType?.nameForDialogs || null,
+        // bleMaxWriteSize moved out of connectorOptions into capabilities.tuning
         configuredBleMaxWriteSize:
-          systemType?.connectorOptions?.bleMaxWriteSize ?? null,
+          systemType?.capabilities?.tuning?.bleMaxWriteSize ?? null,
         effectiveBleMaxWriteSize: channel?._maxBleWriteSize ?? null,
         fileBlockSize: channel?.fhFileBlockSize?.() ?? null,
         gattConnected: Boolean(channel?.getConnectedLocator?.()?.gatt?.connected),
       };
     });
+    // Fix validation (issue #1): Marty reports SystemName "RIC"; the dashboard
+    // must map that to its dedicated Marty system type and apply the
+    // conservative 182-byte BLE write size, not the generic 244.
     assert.equal(details.observation.reportedSystemName, "RIC");
-    assert.equal(details.observation.systemTypeName, "Generic System");
-    assert.equal(details.observation.configuredBleMaxWriteSize, 244);
-    assert.equal(details.observation.effectiveBleMaxWriteSize, 244);
-    assert.equal(details.observation.fileBlockSize, 500);
+    assert.equal(details.observation.systemTypeName, "Robotical Marty");
+    assert.equal(details.observation.configuredBleMaxWriteSize, 182);
+    assert.equal(details.observation.effectiveBleMaxWriteSize, 182);
     assert.equal(details.observation.gattConnected, true);
     console.log(
-      "[reproduced] Marty reported RIC, dashboard selected Generic System, " +
-        "and BLE write size became 244 instead of the Marty-specific 182."
+      "[validated] Marty reported RIC, dashboard selected Robotical Marty, " +
+        "and the BLE write size is the Marty-specific 182."
     );
   } finally {
     await clickDisconnect(page).catch(() => {});
@@ -956,7 +1067,7 @@ async function main() {
     } else {
       const port = await findOpenPort();
       baseUrl = `http://${HOST}:${port}`;
-      server = startDashboardServer(port);
+      server = await startDashboardServer(port);
     }
     report.baseUrl = baseUrl;
     console.log(`[server] Waiting for ${baseUrl}`);

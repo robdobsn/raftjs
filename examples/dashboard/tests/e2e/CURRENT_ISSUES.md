@@ -23,9 +23,9 @@ implemented.
 
 ## 1. Dashboard classifies Marty as Generic and applies 244-byte BLE writes
 
-- **Status:** Open
-- **Evidence:** Real hardware reproduced
-- **Scenario:** `marty-ble-write-size`
+- **Status:** Fixed (validated on real hardware)
+- **Evidence:** Real hardware validated
+- **Scenario:** `marty-ble-write-size` (assertions inverted to validate the fix)
 
 ### Observed behaviour
 
@@ -48,6 +48,14 @@ therefore uses 244-byte BLE writes.
 
 Register the Marty implementation for the firmware-reported `RIC` name, or
 normalize `RIC` to the Marty system type before selecting connector options.
+
+### Resolution
+
+`ConnManager` now registers `SystemTypeMarty` under the firmware-reported `RIC`
+name as well as `Marty`, so Marty resolves to its dedicated system type. The
+`bleMaxWriteSize` value (182) moved into `capabilities.tuning` and is applied on
+connect. Validated on a physical Marty: `SystemName RIC` -> `Robotical Marty`
+with a 182-byte effective BLE write size.
 
 ## 2. Initial `connect()` continues after explicit disconnect
 
@@ -223,7 +231,7 @@ defined before deciding which setup operations need to be replayed.
 
 | Scenario | Transport | Hardware | Current result |
 |---|---|---|---|
-| `marty-ble-write-size` | WebBLE | Physical Marty | Reproduced |
+| `marty-ble-write-size` | WebBLE | Physical Marty | Fixed - validated |
 | `marty-connect-disconnect-race` | WebBLE | Physical Marty | Reproduced |
 | `marty-reconnect-disconnect-race` | WebBLE | Physical Marty | Reproduced |
 | `marty-subscribe-failure-resolved` | WebBLE | Physical Marty | Reproduced |
