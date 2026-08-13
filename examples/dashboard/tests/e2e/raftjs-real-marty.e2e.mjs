@@ -145,13 +145,11 @@ function startDashboardServer(port) {
 // exposed as a Windows mapped drive. A one-shot build + static serve is
 // filesystem-agnostic and all we need for an E2E run.
 function buildDashboard() {
-  const parcelBin = path.join(
-    DASHBOARD_DIR,
-    "node_modules",
-    ".bin",
-    process.platform === "win32" ? "parcel.cmd" : "parcel"
-  );
-  if (!fsSync.existsSync(parcelBin)) {
+  // Invoke parcel's JS entry with the current node executable rather than the
+  // .bin/.cmd shim: newer Node versions refuse to spawn .cmd files without a
+  // shell (CVE-2024-27980 hardening -> spawnSync EINVAL on Windows).
+  const parcelJs = path.join(DASHBOARD_DIR, "node_modules", "parcel", "lib", "bin.js");
+  if (!fsSync.existsSync(parcelJs)) {
     throw new Error(
       `Dashboard dependencies are missing. Run npm install in ${DASHBOARD_DIR}.`
     );
@@ -160,13 +158,13 @@ function buildDashboard() {
   // --no-cache: parcel's cache invalidation relies on file mtimes, which are
   // unreliable across a WSL/9P mapped drive - a stale cache silently serves an
   // old bundle. A clean build costs a few seconds and guarantees current source.
-  const args = ["build", "src/index.html", "--dist-dir", distDir, "--no-optimize", "--no-cache"];
+  const args = [parcelJs, "build", "src/index.html", "--dist-dir", distDir, "--no-optimize", "--no-cache"];
   if (process.platform === "win32") {
     // Keep Parcel's LMDB cache off the 9P mapped drive (mmap fails there).
     args.push("--cache-dir", path.join(os.tmpdir(), "raftjs-dashboard-e2e-cache"));
   }
   console.log("[server] Building dashboard (parcel build)...");
-  execFileSync(parcelBin, args, {
+  execFileSync(process.execPath, args, {
     cwd: DASHBOARD_DIR,
     stdio: "inherit",
     env: { ...process.env },

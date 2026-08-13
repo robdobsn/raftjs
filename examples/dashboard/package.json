@@ -21,7 +21,7 @@
     "console-browserify": "^1.2.0",
     "parcel": "^2.16.3",
     "process": "^0.11.10",
-    "puppeteer": "^24.42.0",
+    "puppeteer": "^25.6.0",
     "rimraf": "^6.0.1",
     "typescript": "^5.3.3",
     "util": "^0.12.5"
@@ -39,6 +39,7 @@
     "@parcel/watcher@2.5.6": true,
     "@swc/core@1.15.21": true,
     "lmdb@2.8.5": true,
-    "msgpackr-extract@3.0.3": true
+    "msgpackr-extract@3.0.3": true,
+    "puppeteer@25.7.0": true
   }
 }
