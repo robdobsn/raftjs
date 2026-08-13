@@ -59,9 +59,9 @@ with a 182-byte effective BLE write size.
 
 ## 2. Initial `connect()` continues after explicit disconnect
 
-- **Status:** Open
+- **Status:** Fixed (validated on real hardware)
 - **Evidence:** Real hardware with deterministic timing gate
-- **Scenario:** `marty-connect-disconnect-race`
+- **Scenario:** `marty-connect-disconnect-race` (assertions inverted to validate the fix)
 
 ### Observed behaviour
 
@@ -95,6 +95,16 @@ a connection generation across its awaited stages. `disconnect()` can set
 Explicit disconnect must invalidate the pending connection generation. Every
 post-await stage of `connect()` should stop quietly when it no longer owns the
 active connection and channel.
+
+### Resolution
+
+`RaftConnector.connect()` now pins the channel and retry generation at entry
+(`stillOwner()`) and re-checks after every awaited stage (channel connect,
+system-type resolution, capability resolution, subscription, time sync),
+returning `false` quietly when ownership was lost. This also gates the
+`CONN_CONNECTED` emit so a disconnected connection is never reported connected.
+Validated on a physical Marty: the gated `connect()` resolved (no `TypeError`)
+and the connector remained cleanly disconnected.
 
 ## 3. Reconnect emits `ISSUE_RESOLVED` after explicit disconnect begins
 
@@ -232,7 +242,7 @@ defined before deciding which setup operations need to be replayed.
 | Scenario | Transport | Hardware | Current result |
 |---|---|---|---|
 | `marty-ble-write-size` | WebBLE | Physical Marty | Fixed - validated |
-| `marty-connect-disconnect-race` | WebBLE | Physical Marty | Reproduced |
+| `marty-connect-disconnect-race` | WebBLE | Physical Marty | Fixed - validated |
 | `marty-reconnect-disconnect-race` | WebBLE | Physical Marty | Reproduced |
 | `marty-subscribe-failure-resolved` | WebBLE | Physical Marty | Reproduced |
 | `marty-websocket-stale-close` | WebSocket | Reachable Marty required | Implemented, not run on hardware |

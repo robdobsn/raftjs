@@ -157,7 +157,10 @@ function buildDashboard() {
     );
   }
   const distDir = path.join(DASHBOARD_DIR, "dist-e2e");
-  const args = ["build", "src/index.html", "--dist-dir", distDir, "--no-optimize"];
+  // --no-cache: parcel's cache invalidation relies on file mtimes, which are
+  // unreliable across a WSL/9P mapped drive - a stale cache silently serves an
+  // old bundle. A clean build costs a few seconds and guarantees current source.
+  const args = ["build", "src/index.html", "--dist-dir", distDir, "--no-optimize", "--no-cache"];
   if (process.platform === "win32") {
     // Keep Parcel's LMDB cache off the 9P mapped drive (mmap fails there).
     args.push("--cache-dir", path.join(os.tmpdir(), "raftjs-dashboard-e2e-cache"));
@@ -687,14 +690,17 @@ async function scenarioInitialConnectDisconnectRace(page, details) {
         channelPresent: Boolean(probe.connector.getRaftChannel()),
       };
     });
+    // Fix validation (issue #2): connect() pins its connection ownership and
+    // stops quietly after disconnect - no null-channel crash, the connect
+    // promise resolves (false), and the connector stays disconnected.
     assert.equal(details.final.disconnectStatus, "resolved");
-    assert.equal(details.final.connectStatus, "rejected");
-    assert.match(
-      details.final.connectError || "",
-      /Cannot read properties of null|requiresSubscription|fhFileBlockSize/
-    );
+    assert.equal(details.final.connectStatus, "resolved");
+    assert.equal(details.final.connectError, null);
+    assert.equal(details.final.connectorConnected, false);
+    assert.equal(details.final.channelPresent, false);
     console.log(
-      `[reproduced] ${details.final.connectError.split("\n")[0]}`
+      "[validated] connect() aborted quietly after explicit disconnect; " +
+        "no stale continuation acted on the removed channel."
     );
   } finally {
     await page.evaluate(() => {

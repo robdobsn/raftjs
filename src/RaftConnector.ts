@@ -334,6 +334,16 @@ export default class RaftConnector {
     this._retryIfLostDisconnectTime = null;
     this._retryIfLostIsConnected = false;
 
+    // Pin this connection's identity. disconnect() (or a newer connect())
+    // nulls/replaces _raftChannel and bumps the generation while this method is
+    // awaiting; every post-await stage must stop quietly when ownership is lost
+    // rather than acting on a torn-down or replacement connection.
+    const ownedChannel = this._raftChannel;
+    const ownedGeneration = this._retryIfLostGeneration;
+    const stillOwner = () =>
+      this._raftChannel === ownedChannel &&
+      this._retryIfLostGeneration === ownedGeneration;
+
     // Connect channel first (system type resolution needs a live connection)
     let connOk = false;
     try {
@@ -344,6 +354,11 @@ export default class RaftConnector {
       connOk = await this._connectToChannel();
     } catch (err) {
       RaftLog.warn('RaftConnector.connect - error: ' + err);
+    }
+
+    if (connOk && !stillOwner()) {
+      RaftLog.info('connect superseded or disconnected during channel connect - aborting');
+      return false;
     }
 
     if (connOk) {
@@ -358,6 +373,10 @@ export default class RaftConnector {
           this._raftSystemUtils.setDefaultWiFiHostname(this._systemType.defaultWiFiHostname);
         }
       }
+      if (!stillOwner()) {
+        RaftLog.info('connect superseded or disconnected during system type resolution - aborting');
+        return false;
+      }
 
       // Setup system type
       if (this._systemType) {
@@ -371,6 +390,10 @@ export default class RaftConnector {
       const sysInfo = await this._raftSystemUtils.getSystemInfo();
       this._raftSystemUtils.seedCapabilities(this._systemType?.capabilities, sysInfo.SystemVersion);
       await this._raftSystemUtils.refreshCapabilities();
+      if (!stillOwner()) {
+        RaftLog.info('connect superseded or disconnected during capability resolution - aborting');
+        return false;
+      }
 
       // Apply per-system-type BLE write size now the type is known (the channel
       // connected before this point using the conservative default). The value
@@ -387,6 +410,10 @@ export default class RaftConnector {
           RaftLog.info(`connect subscribed for updates`);
         } catch (error: unknown) {
           RaftLog.warn(`connect subscribe for updates failed ${error}`)
+        }
+        if (!stillOwner()) {
+          RaftLog.info('connect superseded or disconnected during subscription - aborting');
+          return false;
         }
       }
 
@@ -408,6 +435,10 @@ export default class RaftConnector {
           RaftLog.info(`connect synced time to device: ${utc}${posixTZ ? ` tz=${posixTZ}` : ''}`);
         } catch (error) {
           RaftLog.warn(`connect time sync failed: ${error}`);
+        }
+        if (!stillOwner()) {
+          RaftLog.info('connect superseded or disconnected during time sync - aborting');
+          return false;
         }
       }
 
