@@ -195,9 +195,9 @@ Validated on a physical Marty with an injected subscription failure.
 
 ## 5. An obsolete WebSocket can clear a newer socket's state
 
-- **Status:** Open; real Marty Wi-Fi verification pending
-- **Evidence:** Code/isolated reproduced
-- **Scenario:** `marty-websocket-stale-close`
+- **Status:** Fixed (validated on real hardware over Wi-Fi)
+- **Evidence:** Real hardware validated
+- **Scenario:** `marty-websocket-stale-close` (assertions inverted to validate the fix)
 
 ### Observed behaviour
 
@@ -221,9 +221,15 @@ newer live connection.
 Capture the existing socket before replacement, close it deliberately, and add
 socket identity or generation checks to every asynchronous open/close handler.
 
-### Verification still needed
+### Resolution
 
-Run `marty-websocket-stale-close` against a reachable Marty Wi-Fi locator.
+`_wsConnect()` now captures the existing socket before nulling the shared
+field, detaches its handlers, and closes it deliberately. `onmessage`/`onclose`
+carry a socket-identity check so an obsolete socket's late close cannot clear
+the replacement socket's state or emit a spurious `CONN_DISCONNECTED`. Connected
+state is assigned only when a socket takes ownership in `_wsConnect`, not in
+`onopen`. Validated against a physical Marty over Wi-Fi: the stale close was
+ignored and the replacement socket stayed connected.
 
 ## 6. Consumer BLE write-size configuration remains inconsistent
 
@@ -245,16 +251,22 @@ configuration. Each consumer must register the correct system type and value.
 
 ## 7. Reconnect restores subscriptions but not all connect-time session state
 
-- **Status:** Potential gap
-- **Evidence:** Source review
+- **Status:** Implemented (datetime replay on reconnect)
+- **Evidence:** Source review; exercised by the reconnect e2e scenarios
 
 The channel-only reconnect path calls `_reestablishAfterReconnect()`, which
-currently restores publish subscriptions. It does not repeat other connect-time
-session setup such as optional device date/time synchronization.
+restores publish subscriptions. It did not repeat other connect-time session
+setup such as optional device date/time synchronization.
 
-This may matter when transport loss was caused by a device reboot that also
-cleared device-side session state. The expected reconnect contract should be
-defined before deciding which setup operations need to be replayed.
+### Resolution
+
+The reconnect contract now replays the device time sync:
+`_reestablishAfterReconnect()` re-sends `datetime` (best-effort) after
+re-subscribing, gated on the same `syncTimeOnConnect` option and capability
+check as the connect-time sync - covering the case where the transport loss was
+a device reboot that cleared the device clock. Other connect-time setup
+(system-type `setup()`, capability resolution) is intentionally not repeated on
+a channel-only reconnect.
 
 ## Current automated coverage
 
@@ -264,7 +276,7 @@ defined before deciding which setup operations need to be replayed.
 | `marty-connect-disconnect-race` | WebBLE | Physical Marty | Fixed - validated |
 | `marty-reconnect-disconnect-race` | WebBLE | Physical Marty | Fixed - validated |
 | `marty-subscribe-failure-resolved` | WebBLE | Physical Marty | Fixed - validated |
-| `marty-websocket-stale-close` | WebSocket | Reachable Marty required | Implemented, not run on hardware |
+| `marty-websocket-stale-close` | WebSocket | Physical Marty (Wi-Fi) | Fixed - validated |
 
 ## Verification baseline
 

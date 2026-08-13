@@ -965,16 +965,12 @@ async function scenarioWebSocketStaleClose(page, details) {
     }
     connector.setRetryConnectionIfLost(false, 60);
     oldSocket.close(1000);
-    const startedAt = Date.now();
-    while (
-      Date.now() - startedAt < 5000 &&
-      !(channel._webSocket === null && newSocket.readyState === WebSocket.OPEN)
-    ) {
-      await new Promise((resolve) => setTimeout(resolve, 20));
-    }
+    // Allow any (stale) close handling to surface; with the fix the obsolete
+    // socket's close must not disturb the replacement socket's state.
+    await new Promise((resolve) => setTimeout(resolve, 1500));
     const result = {
       oldAndNewDiffer: oldSocket !== newSocket,
-      channelSocketCleared: channel._webSocket === null,
+      channelSocketIsNew: channel._webSocket === newSocket,
       channelConnected: channel.isConnected(),
       newSocketReadyState: newSocket.readyState,
       openReadyState: WebSocket.OPEN,
@@ -982,15 +978,17 @@ async function scenarioWebSocketStaleClose(page, details) {
     newSocket.close(1000);
     return result;
   });
+  // Fix validation (issue #5): a late close from the obsolete socket is ignored
+  // - the replacement socket remains the owner and the channel stays connected.
   assert.equal(details.observation.oldAndNewDiffer, true);
-  assert.equal(details.observation.channelSocketCleared, true);
-  assert.equal(details.observation.channelConnected, false);
+  assert.equal(details.observation.channelSocketIsNew, true);
+  assert.equal(details.observation.channelConnected, true);
   assert.equal(
     details.observation.newSocketReadyState,
     details.observation.openReadyState
   );
   console.log(
-    "[reproduced] Old WebSocket close cleared the still-open replacement socket."
+    "[validated] Stale WebSocket close was ignored; replacement socket stayed connected."
   );
 }
 

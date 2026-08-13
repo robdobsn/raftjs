@@ -423,19 +423,7 @@ export default class RaftConnector {
       // Sync time to device if enabled (default: true)
       const syncTime = this._systemType?.connectorOptions?.syncTimeOnConnect ?? true;
       if (syncTime && this._raftSystemUtils.isCapabilitySupported('datetime') !== false) {
-        try {
-          const now = new Date();
-          const utc = now.toISOString().replace(/\.\d{3}Z$/, 'Z');
-          const params: Record<string, string> = { UTC: utc };
-          const posixTZ = getHostPosixTZ();
-          if (posixTZ) {
-            params.tz = posixTZ;
-          }
-          await this.sendRICRESTMsg('datetime', params);
-          RaftLog.info(`connect synced time to device: ${utc}${posixTZ ? ` tz=${posixTZ}` : ''}`);
-        } catch (error) {
-          RaftLog.warn(`connect time sync failed: ${error}`);
-        }
+        await this._syncTimeToDevice();
         if (!stillOwner()) {
           RaftLog.info('connect superseded or disconnected during time sync - aborting');
           return false;
@@ -1115,6 +1103,25 @@ export default class RaftConnector {
   }
 
   /**
+   * Send the current UTC time (and host timezone) to the device. Best-effort.
+   */
+  private async _syncTimeToDevice(): Promise<void> {
+    try {
+      const now = new Date();
+      const utc = now.toISOString().replace(/\.\d{3}Z$/, 'Z');
+      const params: Record<string, string> = { UTC: utc };
+      const posixTZ = getHostPosixTZ();
+      if (posixTZ) {
+        params.tz = posixTZ;
+      }
+      await this.sendRICRESTMsg('datetime', params);
+      RaftLog.info(`synced time to device: ${utc}${posixTZ ? ` tz=${posixTZ}` : ''}`);
+    } catch (error) {
+      RaftLog.warn(`time sync failed: ${error}`);
+    }
+  }
+
+  /**
    * Re-establish session state after a channel-only reconnect. The peer wipes
    * subscriptions on reboot, so a bare channel reconnect resumes the link but
    * not device data unless we re-subscribe here.
@@ -1127,6 +1134,7 @@ export default class RaftConnector {
     // Re-apply the resolved BLE write size - a fresh channel connect resets to
     // the conservative default.
     this._applyResolvedBleMaxWriteSize();
+    let restoredOk = true;
     if (this._systemType &&
       this._systemType.subscribeForUpdates &&
       this._raftChannel.requiresSubscription()) {
@@ -1135,10 +1143,18 @@ export default class RaftConnector {
         RaftLog.info(`reconnect re-subscribed for updates`);
       } catch (error: unknown) {
         RaftLog.warn(`reconnect re-subscribe for updates failed ${error}`);
-        return false;
+        restoredOk = false;
       }
     }
-    return true;
+    // Re-send the device time - the loss may have been a device reboot which
+    // cleared its clock. Best-effort and gated on the same capability check as
+    // the connect-time sync.
+    const syncTime = this._systemType?.connectorOptions?.syncTimeOnConnect ?? true;
+    if (this._raftChannel && syncTime &&
+      this._raftSystemUtils.isCapabilitySupported('datetime') !== false) {
+      await this._syncTimeToDevice();
+    }
+    return restoredOk;
   }
 
   // Mark: OTA Update -----------------------------------------------------------------------------------------

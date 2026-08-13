@@ -178,20 +178,17 @@ export default class RaftChannelWebSocket implements RaftChannel {
     // Form websocket address
     const wsURL = locator.toString();
 
-    // Connect to websocket
-    // try {
-    //     this._webSocket = await this._webSocketOpen(wsURL);
-    // } catch (error: any) {
-    //     RaftLog.debug(`Unable to create WebSocket ${error.toString()}`);
-    //     return false;
-    // }
+    // Capture and deliberately close any existing socket before replacement.
+    // Detach its handlers first so a late close event from the obsolete socket
+    // cannot clear the replacement socket's shared state.
+    const existingSocket = this._webSocket;
     this._webSocket = null;
-    // Close any existing WebSocket before creating new one
-    RaftLog.verbose(`[RaftChannelWebSocket._wsConnect] START existing WebSocket?, ${!!this._webSocket}`);
-    if (this._webSocket) {
+    if (existingSocket) {
       RaftLog.verbose(`[RaftChannelWebSocket._wsConnect] Closing existing WebSocket...`);
       try {
-        this._webSocket.close(1000);
+        existingSocket.onmessage = () => { /* detached */ };
+        existingSocket.onclose = () => { /* detached */ };
+        existingSocket.close(1000);
       } catch (e) {
         RaftLog.warn(`[RaftChannelWebSocket._wsConnect] Error closing existing WebSocket: ${e}`);
       }
@@ -200,11 +197,13 @@ export default class RaftChannelWebSocket implements RaftChannel {
       reject: (reason?: unknown) => void) => {
       this._webSocketOpen(wsURL).then((ws) => {
         this._webSocket = ws;
+        this._isConnected = true;
         this._connectedLocator = wsURL;
         RaftLog.debug(`_wsConnect - opened connection`);
 
-        // Handle messages
-        this._webSocket.onmessage = (evt: WebSocket.MessageEvent) => {
+        // Handle messages (owner check guards against a stale socket's events)
+        ws.onmessage = (evt: WebSocket.MessageEvent) => {
+          if (this._webSocket !== ws) return;
           // RaftLog.debug("WebSocket rx");
           if (evt.data instanceof ArrayBuffer) {
             const msg = new Uint8Array(evt.data);
@@ -212,8 +211,14 @@ export default class RaftChannelWebSocket implements RaftChannel {
           }
         }
 
-        // Handle close event
-        this._webSocket.onclose = (evt: WebSocket.CloseEvent) => {
+        // Handle close event - only the socket that still owns the channel may
+        // clear shared state and report disconnection; a late close from an
+        // obsolete socket must not erase a newer live connection.
+        ws.onclose = (evt: WebSocket.CloseEvent) => {
+          if (this._webSocket !== ws) {
+            RaftLog.info(`_wsConnect - stale socket closed code ${evt.code} - ignored (ownership transferred)`);
+            return;
+          }
           RaftLog.info(`_wsConnect - closed code ${evt.code} wasClean ${evt.wasClean} reason ${evt.reason}`);
           this._webSocket = null;
           this._isConnected = false;
@@ -253,8 +258,9 @@ export default class RaftChannelWebSocket implements RaftChannel {
         webSocket.binaryType = "arraybuffer";
         webSocket.onopen = (_evt: WebSocket.Event) => {
           RaftLog.debug(`RaftChannelWebSocket._webSocketOpen - onopen ${_evt.toString()}`);
-          // // We're connected
-          this._isConnected = true;
+          // Shared connected state is assigned by _wsConnect when this socket
+          // takes ownership, not here - a socket that never becomes the owner
+          // must not mark the channel connected.
           resolve(webSocket);
         };
         webSocket.onerror = (evt: WebSocket.ErrorEvent) => {
