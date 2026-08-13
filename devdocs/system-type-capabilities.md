@@ -210,11 +210,9 @@ interface VersionRange {
 interface SystemCapabilities {
   // Gated endpoints this type supports, optionally version-gated.
   // `true` = all versions; a range/ranges = only within those versions.
-  endpoints: Record<string, true | VersionRange | VersionRange[]>;
-
-  // Endpoints whose call *form* changed across versions. First matching
-  // range wins; used to build the actual URL.
-  forms?: Record<string, Array<VersionRange & { build: (p: unknown) => string }>>;
+  // Omit `endpoints` (or the whole `capabilities`) to gate nothing statically
+  // (fully dynamic, e.g. Generic) - distinct from `endpoints: {}` (deny all).
+  endpoints?: Record<string, true | VersionRange | VersionRange[]>;
 
   // Tuning values, version-bracketable. bleMaxWriteSize folded in here.
   tuning?: {
@@ -222,6 +220,10 @@ interface SystemCapabilities {
   };
 }
 ```
+
+> A `forms` section (per-version URL builders for endpoints whose call *form*
+> changed) is **not yet implemented** - see Phasing. `caps` is expected to make
+> it largely unnecessary.
 
 Example (Marty):
 
@@ -303,18 +305,25 @@ does) and remain fully dynamic for endpoint support.
 
 ## Enforcement point
 
-Centralise in one wrapper, e.g. `RaftSystemUtils.sendOptional(endpoint, params)`
-(or a `CapabilityResolver` owned by the connector), which:
+Implemented as `RaftCapabilityResolver` ([../src/RaftCapabilities.ts](../src/RaftCapabilities.ts)),
+owned by `RaftSystemUtils` and seeded from `systemType.capabilities` +
+`SystemVersion` at connect, cleared on disconnect. It exposes:
 
-1. resolves `endpoint` → concrete URL via `forms` (or skips if unsupported),
-2. consults Layer B then Layer A,
-3. sends at most once when unknown,
-4. records the result in Layer B,
-5. short-circuits the retry tracker and demotes the log to debug for
-   known-unsupported endpoints.
+- `shouldQueryCaps()` — whether to call the firmware `caps` endpoint (the static
+  verdict for `caps` itself; a type/version known not to have it skips the probe);
+- `setCapsResult(list | null)` — record the `caps` outcome (Layer C);
+- `isSupported(endpoint)` — resolution order Layer C → Layer B → Layer A →
+  `undefined` (unknown); sub-paths map to their base name for the caps list;
+- `recordResult(endpoint, ok)` — Layer B runtime cache;
+- `bleMaxWriteSize()` — resolved tuning.
 
-The resolver is seeded from `systemType.capabilities` + `SystemVersion` at
-connect time and cleared on disconnect.
+Rather than a single `sendOptional` wrapper, call sites that issue a gated
+endpoint check `RaftSystemUtils.isCapabilitySupported(name) !== false` first and
+skip the send when known-unsupported (done in the connector for `datetime`, in
+`refreshPublishTopicMap` for `pubtopics`, and in the dashboard for the
+`datalog`/`camera`/`devman/devconfig` probes), recording the outcome into Layer B
+where useful. This keeps the check *before* the `msgTrackTimer` retry loop so a
+known-unsupported endpoint is never enqueued.
 
 ## `bleMaxWriteSize` folding
 

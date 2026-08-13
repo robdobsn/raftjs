@@ -1,5 +1,12 @@
 # BLE Max Write Size / MTU Handling
 
+> **Status: implemented.** `bleMaxWriteSize` is now a per-system-type,
+> version-bracketable value under `capabilities.tuning.bleMaxWriteSize` (removed
+> from `ConnectorOptions`). The connector applies the resolved value after
+> system-type resolution and again after a channel-only reconnect. See
+> [system-type-capabilities.md](system-type-capabilities.md) (`bleMaxWriteSize`
+> folding). The design rationale below is retained for context.
+
 ## The problem
 
 `RaftChannelBLE.web.ts` splits outbound writes into chunks of at most
