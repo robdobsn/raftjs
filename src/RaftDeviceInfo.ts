@@ -44,6 +44,33 @@ export function isAttrTypeSigned(attrType: string): boolean {
     return attrStr === "b" || attrStr === "h" || attrStr === "i" || attrStr === "l" || attrStr === "q";
 }
 
+// Number of values a single sample of this attribute decodes to (array attributes
+// like "B[9]" or "3H" decode to multiple values per sample; "16s" strings decode to one)
+export function getAttrElemsPerSample(attrType: string): number {
+    let idx = 0;
+    if (attrType.charAt(0) === "<" || attrType.charAt(0) === ">") idx = 1;
+    let numStr = "";
+    while (idx < attrType.length && /\d/.test(attrType[idx])) {
+        numStr += attrType[idx];
+        idx++;
+    }
+    const prefix = numStr ? parseInt(numStr, 10) : 1;
+    const code = attrType.charAt(idx);
+    idx++;
+    let bracket = 1;
+    if (attrType.charAt(idx) === "[") {
+        const endIdx = attrType.indexOf("]", idx + 1);
+        if (endIdx > idx) {
+            const n = parseInt(attrType.slice(idx + 1, endIdx), 10);
+            if (Number.isFinite(n) && n > 0) bracket = n;
+        }
+    }
+    // 's' consumes its repeat as byte length and yields one string; 'x' is padding
+    if (code === "s" || code === "x") return 1;
+    const total = (Number.isFinite(prefix) && prefix > 0 ? prefix : 1) * bracket;
+    return total > 0 ? total : 1;
+}
+
 export function decodeAttrUnitsEncoding(unitsEncoding: string): string {
     // Replace instances of HTML encoded chars like &deg; with the actual char
     return unitsEncoding
@@ -70,6 +97,10 @@ export interface DeviceTypeAttribute {
     a?: number;                     // Value to add after division
     f?: string;                     // Format string similar to C printf format string (e.g. %d, %x, %f, %04d, %08x, %08.2f etc.), %b = boolean (0 iff 0, else 1)
     o?: string;                     // Type of output value (e.g. 'bool', 'uint8', 'float')
+    el?: string[];                  // Element labels for array attributes (e.g. FFT band centre frequencies)
+    eu?: string;                    // Element-axis units for array attributes (e.g. 'Hz'); u remains the value units
+    vt?: string;                    // Visual type - names a specialized visualizer (e.g. 'spectrum', 'heatmap')
+    vg?: string;                    // Visual group - attributes sharing a group render on the same timeline chart
     v?: boolean | number;           // Visibility of the attribute in all locations (mainly used to hide attributes that are not useful to the user)
     vs?: boolean | number;          // Display attribute value in time-series graphs
     vf?: boolean | number;          // Display attribute value in the device info panel
@@ -131,6 +162,7 @@ export interface DeviceTypeAction {
     d?: number;                     // Default value
     map?: Record<string, ActionMapValue>; // Discrete value mapping (display value -> hex string or {w, i, s} object)
     desc?: string;                  // Human-readable description
+    vt?: string;                    // Visual type - names a specialized visualizer (e.g. 'ledgrid')
 }
 
 export interface DeviceTypeInfo {

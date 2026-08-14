@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import ConnManager from './ConnManager';
 import { DeviceTypeAction, ActionMapEntry } from '../../../src/RaftDeviceInfo';
-import DispLEDGrid from './DispLedGrid';
+import { VisualizerRegistry } from './visualizers';
 
 const connManager = ConnManager.getInstance();
 
@@ -180,17 +180,14 @@ const DeviceActionsForm: React.FC<DeviceActionsTableProps> = ({ deviceKey }: Dev
                 </thead>
                 <tbody>
                     {deviceActions.map((action) => {
-                        if (action.f === "LEDPIX") {
+                        const vizEntry = VisualizerRegistry.matchItem({ kind: 'action', action }, undefined, 'actions');
+                        if (vizEntry) {
+                            const Viz = vizEntry.component;
                             return (
                                 <tr key={action.n}>
                                     <td>{action.n}</td>
                                     <td colSpan={2}>
-                                        <DispLEDGrid
-                                            rows={action.NY ?? 1}
-                                            cols={action.NX ?? 1}
-                                            deviceKey={deviceKey}
-                                            deviceAction={action}
-                                        />
+                                        <Viz deviceKey={deviceKey} action={action} />
                                     </td>
                                 </tr>
                             );

@@ -7,6 +7,8 @@ import DeviceLineChart from './DeviceLineChart';
 import DeviceStatsPanel from './DeviceStatsPanel';
 import ConnManager from './ConnManager';
 import SettingsManager from './SettingsManager';
+import { VisualizerRegistry } from './visualizers';
+import { computeTimelineChartGroups } from './chartGrouping';
 
 const connManager = ConnManager.getInstance();
 
@@ -249,9 +251,17 @@ const DevicePanel = ({ deviceKey, lastUpdated }: DevicePanelProps) => {
                 {showStats && (
                     <DeviceStatsPanel deviceKey={deviceKey} lastUpdated={timedChartUpdate} />
                 )}
-                {showCharts &&
-                    <DeviceLineChart deviceKey={deviceKey} lastUpdated={timedChartUpdate} />
-                }
+                {showCharts && (
+                    <div className="device-charts-panel">
+                        {(deviceState ? VisualizerRegistry.selectForDevice(deviceState, 'charts') : []).map((pv) => {
+                            const Viz = pv.entry.component;
+                            return <Viz key={pv.key} deviceKey={deviceKey} attribute={pv.attribute} action={pv.action} lastUpdated={timedChartUpdate} />;
+                        })}
+                        {(deviceState ? computeTimelineChartGroups(deviceState) : []).map((group) => (
+                            <DeviceLineChart key={group.id} deviceKey={deviceKey} lastUpdated={timedChartUpdate} attrNames={group.attrNames} />
+                        ))}
+                    </div>
+                )}
             </div>
         </div>
     );

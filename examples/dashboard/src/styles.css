@@ -366,6 +366,29 @@ h1 {
     /* Chart is approximately 1/4 of the viewport height in landscape */
 }
 
+/* Right-hand chart area: stacks specialized visualizers above the timeline chart */
+.device-charts-panel {
+    flex: 1 1 auto;
+    min-width: 50%;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.device-charts-panel .device-line-chart {
+    min-width: 0;
+}
+
+.device-spectrum-chart {
+    padding: 10px;
+    border: 1px solid #666;
+    border-radius: 4px;
+    min-height: 10rem;
+    height: 18vh;
+    background-color: #282c34;
+    color: #fff;
+}
+
 .menu-icon,
 .header-menu-icon {
     cursor: pointer;

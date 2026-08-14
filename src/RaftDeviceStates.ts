@@ -14,15 +14,25 @@ export function deviceAttrGetLatestFormatted(attrState: DeviceAttributeState): s
     if (attrState.values.length === 0) {
         return 'N/A';
     }
+    // Array attributes: format the latest full sample
+    const elemsPerSample = attrState.elemsPerSample ?? 1;
+    if (elemsPerSample > 1 && attrState.values.length >= elemsPerSample) {
+        const sample = attrState.values.slice(-elemsPerSample);
+        return '[' + sample.map(v => deviceAttrFormatValue(v, attrState.format)).join(', ') + ']';
+    }
     const value = attrState.values[attrState.values.length - 1];
+    return deviceAttrFormatValue(value, attrState.format);
+}
+
+function deviceAttrFormatValue(value: number | string, formatIn: string): string {
     // String values are returned directly
     if (typeof value === 'string') {
         return value;
     }
-    if (attrState.format.length === 0) {
+    if (formatIn.length === 0) {
         return value.toString();
     }
-    let format = attrState.format;
+    let format = formatIn;
     if (format.startsWith("%")) {
         format = format.slice(1);
     }
@@ -62,6 +72,14 @@ export interface DeviceAttributeState {
     format: string;
     visibleSeries: boolean;
     visibleForm: boolean;
+    // Number of values per sample (array attributes decode to >1 value per sample;
+    // values[] is then viewed as values[sampleIdx * elemsPerSample + elemIdx])
+    elemsPerSample?: number;
+    // Element labels/units for array attributes (from schema el/eu fields)
+    elemLabels?: string[];
+    elemUnits?: string;
+    // Visual group for timeline chart splitting (from schema vg field)
+    visualGroup?: string;
 }
 
 export interface DeviceAttributesState {

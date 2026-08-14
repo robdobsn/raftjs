@@ -20,6 +20,8 @@ ChartJS.register(
 export interface DeviceLineChartProps {
     deviceKey: string;
     lastUpdated: number;
+    // Restrict the chart to these attributes (used when splitting into multiple charts)
+    attrNames?: string[];
 }
 
 interface ChartJSData {
@@ -34,7 +36,7 @@ interface ChartJSData {
     }[];
 }
 
-const DeviceLineChart: React.FC<DeviceLineChartProps> = memo(({ deviceKey, lastUpdated }) => {
+const DeviceLineChart: React.FC<DeviceLineChartProps> = memo(({ deviceKey, lastUpdated, attrNames }) => {
 
     const settingsManager = SettingsManager.getInstance();
     const maxChartDataPoints = settingsManager.getSetting('maxChartDataPoints');
@@ -104,7 +106,10 @@ const DeviceLineChart: React.FC<DeviceLineChartProps> = memo(({ deviceKey, lastU
         const uniqueAxes = new Map<string, { range: [number, number], units: string }>();
         const datasets = Object.entries(deviceState.deviceAttributes)
             .filter(([attributeName, attributeDetails]) => {
+                if (attrNames && !attrNames.includes(attributeName)) return false;
                 if (attributeDetails.visibleSeries === false) return false;
+                // Array attributes (multiple values per sample) don't fit a timeline trace
+                if ((attributeDetails.elemsPerSample ?? 1) > 1) return false;
                 // Exclude string-valued attributes from chart
                 if (attributeDetails.values.length > 0 && typeof attributeDetails.values[attributeDetails.values.length - 1] === 'string') return false;
                 return true;

@@ -8,7 +8,7 @@
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 import CustomAttrHandler from "./RaftCustomAttrHandler";
-import { DeviceTypeAttribute, DeviceTypePollRespMetadata, decodeAttrUnitsEncoding, isAttrTypeSigned } from "./RaftDeviceInfo";
+import { DeviceTypeAttribute, DeviceTypePollRespMetadata, decodeAttrUnitsEncoding, getAttrElemsPerSample, isAttrTypeSigned } from "./RaftDeviceInfo";
 import { DeviceAttributesState, DeviceTimeline } from "./RaftDeviceStates";
 import { structSizeOf, structUnpack } from "./RaftStruct";
 import RaftUtils from "./RaftUtils";
@@ -144,12 +144,18 @@ export default class AttributeHandler {
             return msgDataStartIdx+pollRespSizeBytes;
         }
 
-        // All attributes must have the same number of new values
-        const numNewDataPoints = newAttrValues[0].length;
-        for (let i = 1; i < newAttrValues.length; i++) {
-            if (newAttrValues[i].length !== numNewDataPoints) {
+        // Elements per sample for each attribute (array attributes like "B[9]" decode
+        // to multiple values per sample)
+        const elemsPerSample = pollRespMetadata.a.map(attrDef =>
+            ("t" in attrDef && attrDef.t) ? getAttrElemsPerSample(attrDef.t) : 1);
+
+        // All attributes must have the same number of new samples (values ÷ elemsPerSample)
+        const numNewDataPoints = newAttrValues[0].length / elemsPerSample[0];
+        for (let i = 0; i < newAttrValues.length; i++) {
+            const attrSamples = newAttrValues[i].length / elemsPerSample[i];
+            if (attrSamples !== numNewDataPoints || !Number.isInteger(attrSamples)) {
                 if (!attrDecodeFailed) {
-                    console.warn(`DeviceManager msg attrGroup ${JSON.stringify(pollRespMetadata)} attrName ${pollRespMetadata.a[i].n} newAttrValues lengths ${newAttrValues.map(v => v.length).join(",")} do not match`);
+                    console.warn(`DeviceManager msg attrGroup ${JSON.stringify(pollRespMetadata)} attrName ${pollRespMetadata.a[i].n} newAttrValues sample counts ${newAttrValues.map((v, j) => v.length / elemsPerSample[j]).join(",")} do not match`);
                 }
                 return msgDataStartIdx+pollRespSizeBytes;
             }
@@ -168,6 +174,8 @@ export default class AttributeHandler {
             // Check if attribute already exists in the device state
             const attrDef: DeviceTypeAttribute = pollRespMetadata.a[attrIdx];
             if (!(attrDef.n in devAttrsState)) {
+                // v (visibility everywhere) false/0 hides the attribute from both series and form
+                const hiddenAll = "v" in attrDef && (attrDef.v === 0 || attrDef.v === false);
                 devAttrsState[attrDef.n] = {
                     name: attrDef.n,
                     newAttribute: true,
@@ -177,14 +185,21 @@ export default class AttributeHandler {
                     units: decodeAttrUnitsEncoding(attrDef.u || ""),
                     range: attrDef.r || [0, 0],
                     format: ("f" in attrDef && typeof attrDef.f == "string") ? attrDef.f : "",
-                    visibleSeries: "v" in attrDef ? attrDef.v === 0 || attrDef.v === false : ("vs" in attrDef ? (attrDef.vs === 0 || attrDef.vs === false ? false : !!attrDef.vs) : true),
-                    visibleForm: "v" in attrDef ? attrDef.v === 0 || attrDef.v === false : ("vf" in attrDef ? (attrDef.vf === 0 || attrDef.vf === false ? false : !!attrDef.vf) : true),
+                    visibleSeries: hiddenAll ? false : ("vs" in attrDef ? (attrDef.vs === 0 || attrDef.vs === false ? false : !!attrDef.vs) : true),
+                    visibleForm: hiddenAll ? false : ("vf" in attrDef ? (attrDef.vf === 0 || attrDef.vf === false ? false : !!attrDef.vf) : true),
+                    elemsPerSample: elemsPerSample[attrIdx],
+                    elemLabels: attrDef.el,
+                    elemUnits: attrDef.eu,
+                    visualGroup: attrDef.vg,
                 };
             }
 
-            // Check if any data points need to be discarded
-            const discardCount = Math.max(0, devAttrsState[attrDef.n].values.length + newAttrValues[attrIdx].length - maxDataPoints);
+            // Check if any data points need to be discarded (sample-aligned for array attributes)
+            const attrElems = elemsPerSample[attrIdx];
+            const maxValues = maxDataPoints * attrElems;
+            let discardCount = Math.max(0, devAttrsState[attrDef.n].values.length + newAttrValues[attrIdx].length - maxValues);
             if (discardCount > 0) {
+                discardCount = Math.ceil(discardCount / attrElems) * attrElems;
                 devAttrsState[attrDef.n].values.splice(0, discardCount);
             }
 
@@ -278,6 +293,11 @@ export default class AttributeHandler {
 
             // Check if this attribute has a vft field
             if (!("vft" in attrDef) || !attrDef.vft) {
+                continue;
+            }
+
+            // Per-sample validation doesn't apply to array attributes (values ≠ samples)
+            if (attrDef.t && getAttrElemsPerSample(attrDef.t) > 1) {
                 continue;
             }
 
