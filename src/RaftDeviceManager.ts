@@ -1134,6 +1134,30 @@ export class DeviceManager implements RaftDeviceMgrIF{
             .join("");
     }
 
+    ////////////////////////////////////////////////////////////////////////////
+    // Raw I2C write + read via devman/cmdraw (requires firmware with rdData support)
+    ////////////////////////////////////////////////////////////////////////////
+
+    public async cmdRawWriteRead(deviceKey: string, hexWr: string, numToRd: number, timeoutMs = 20): Promise<Uint8Array | null> {
+        const msgHandler = this._systemUtils?.getMsgHandler();
+        if (!msgHandler) return null;
+        const { bus: devBus, addr: devAddr } = this.parseDeviceKeyForCommand(deviceKey);
+        const cmd = `devman/cmdraw?bus=${devBus}&addr=${devAddr}&hexWr=${hexWr}&numToRd=${numToRd}&timeoutMs=${timeoutMs}`;
+        try {
+            const rslt = await msgHandler.sendRICRESTURL<RaftOKFail & { rdData?: string }>(cmd);
+            if (rslt.rslt !== "ok" || typeof rslt.rdData !== "string") return null;
+            const hex = rslt.rdData;
+            const bytes = new Uint8Array(hex.length >> 1);
+            for (let i = 0; i < bytes.length; i++) {
+                bytes[i] = parseInt(hex.substring(i * 2, i * 2 + 2), 16);
+            }
+            return bytes;
+        } catch (error) {
+            console.warn(`DeviceManager cmdRawWriteRead error ${error}`);
+            return null;
+        }
+    }
+
     public async sendAction(deviceKey: string, action: DeviceTypeAction, data: number[]): Promise<boolean> {
         console.log(`DeviceManager sendAction ${deviceKey} action ${action.n} data ${data} map ${JSON.stringify(action.map)} keys ${action.map ? Object.keys(action.map) : 'none'}`);
 

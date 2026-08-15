@@ -9,6 +9,7 @@
 import { VisualizerRegistry } from './VisualizerRegistry';
 import SpectrumChart from './SpectrumChart';
 import LedGridVisualizer from './LedGridVisualizer';
+import VcpCalVisualizer from './VcpCalVisualizer';
 import { getAttrElemsPerSample } from '../../../../src/RaftDeviceInfo';
 
 VisualizerRegistry.register({
@@ -36,6 +37,17 @@ VisualizerRegistry.register({
         return 0;
     },
     component: LedGridVisualizer,
+});
+
+VisualizerRegistry.register({
+    id: 'vcpcal',
+    placement: 'actions',
+    match: (item) => {
+        if (item.kind !== 'action') return 0;
+        if (item.action.vt === 'vcpcal') return 100;
+        return 0;
+    },
+    component: VcpCalVisualizer,
 });
 
 export { VisualizerRegistry } from './VisualizerRegistry';

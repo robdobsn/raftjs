@@ -320,11 +320,17 @@ export class RICStateInfo implements RaftDeviceMgrIF {
     }
 
     // Marty ROSSerial devices are read-only in this view
-    sendAction(_deviceKey: string, _action: DeviceTypeAction, _data: number[]): void {
+    async sendAction(_deviceKey: string, _action: DeviceTypeAction, _data: number[]): Promise<boolean> {
         // Not supported for ROSSerial-derived devices
+        return false;
     }
-    sendCompoundAction(_deviceKey: string, _action: DeviceTypeAction, _data: number[][]): void {
+    async sendCompoundAction(_deviceKey: string, _action: DeviceTypeAction, _data: number[][]): Promise<boolean> {
         // Not supported for ROSSerial-derived devices
+        return false;
+    }
+    async cmdRawWriteRead(_deviceKey: string, _hexWr: string, _numToRd: number, _timeoutMs?: number): Promise<Uint8Array | null> {
+        // Not supported for ROSSerial-derived devices
+        return null;
     }
     async setSampleRate(_deviceKey: string, sampleRateHz: number): Promise<SampleRateResult> {
         return { ok: false, requestedRateHz: sampleRateHz, actualRateHz: 0, intervalUs: 0, numSamples: 0, error: "Not supported" };

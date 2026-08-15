@@ -32,8 +32,11 @@ export default interface RaftDeviceMgrIF {
     removeDeviceRemovedCallback(callback: (deviceKey: string, state: DeviceState) => void): void;
 
     // Send action to device
-    sendAction(deviceKey: string, action: DeviceTypeAction, data: number[]): void;
-    sendCompoundAction(deviceKey: string, action: DeviceTypeAction, data: number[][]): void;
+    sendAction(deviceKey: string, action: DeviceTypeAction, data: number[]): Promise<boolean>;
+    sendCompoundAction(deviceKey: string, action: DeviceTypeAction, data: number[][]): Promise<boolean>;
+
+    // Raw I2C write + read (returns read bytes, or null if unsupported/failed)
+    cmdRawWriteRead(deviceKey: string, hexWr: string, numToRd: number, timeoutMs?: number): Promise<Uint8Array | null>;
 
     // Set sample rate with coordinated polling parameters
     setSampleRate(deviceKey: string, sampleRateHz: number, options?: {

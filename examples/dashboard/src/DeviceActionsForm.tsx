@@ -185,8 +185,7 @@ const DeviceActionsForm: React.FC<DeviceActionsTableProps> = ({ deviceKey }: Dev
                             const Viz = vizEntry.component;
                             return (
                                 <tr key={action.n}>
-                                    <td>{action.n}</td>
-                                    <td colSpan={2}>
+                                    <td colSpan={3}>
                                         <Viz deviceKey={deviceKey} action={action} />
                                     </td>
                                 </tr>
