@@ -1,6 +1,6 @@
 {
     "name": "@robdobsn/raftjs",
-    "version": "2.4.0",
+    "version": "2.4.1",
     "description": "Javascript/TS library for Raft library",
     "main": "dist/web/main.js",
     "types": "dist/web/main.d.ts",
@@ -50,5 +50,8 @@
     "peerDependencies": {
         "react-native": "*",
         "react-native-ble-plx": "*"
+    },
+    "allowScripts": {
+        "unrs-resolver@1.11.1": true
     }
 }
