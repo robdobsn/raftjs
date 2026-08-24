@@ -7,9 +7,14 @@
 // them, and writes the 36-byte cal block + save command over I2C (WRITE_CAL 0x38 + the
 // RSAO save command).
 //
-// The active constants cannot be read back over the dashboard transport (cmdraw reads
-// are not returned), so they are seeded from the firmware's compiled-in defaults,
-// remembered per-device in localStorage after each write, and manually editable.
+// Where the firmware supports cmdraw read-back the active constants are read from the
+// board; otherwise they are seeded from the firmware's compiled-in defaults, remembered
+// per-device in localStorage after each write, and manually editable.
+//
+// The write is verified: WRITE_CAL only updates a RAM staging block, so the block is
+// read back and compared before the save command is sent. I2C writes are otherwise
+// unprotected (the slave ACKs regardless of content) and a corrupted calibration, once
+// saved, is persistent - unlike a corrupted sample, which the next poll replaces.
 //
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -49,10 +54,11 @@ const VcpCalVisualizer: React.FC<DeviceVisualizerProps> = ({ deviceKey, action }
     const [calSource, setCalSource] = useState<string>('assumed (defaults / last written)');
     const [status, setStatus] = useState<string>('');
 
-    // Read the board's cal block via the CONFIG selector (0x12): 16+16+4 bytes
-    const readFromBoard = async (): Promise<boolean> => {
+    // Read the board's raw 36-byte cal block via the CONFIG selector (0x12): 16+16+4.
+    // Returns null if the block could not be read in full.
+    const readCalBlockRaw = async (): Promise<Uint8Array | null> => {
         const deviceManager = connManager.getConnector().getSystemType()?.deviceMgrIF;
-        if (!deviceManager) return false;
+        if (!deviceManager) return null;
         const parts: Uint8Array[] = [];
         for (const [off, len] of [[0x00, 16], [0x10, 16], [0x20, 4]] as const) {
             // CONFIG reads are idempotent, so retry a couple of times if a read
@@ -61,11 +67,17 @@ const VcpCalVisualizer: React.FC<DeviceVisualizerProps> = ({ deviceKey, action }
             for (let attempt = 0; attempt < 3 && !part; attempt++) {
                 part = await deviceManager.cmdRawWriteRead(deviceKey, `12${off.toString(16).padStart(2, '0')}`, len);
             }
-            if (!part || part.length !== len) return false;
+            if (!part || part.length !== len) return null;
             parts.push(part);
         }
         const block = new Uint8Array(36);
         block.set(parts[0], 0); block.set(parts[1], 16); block.set(parts[2], 32);
+        return block;
+    };
+
+    const readFromBoard = async (): Promise<boolean> => {
+        const block = await readCalBlockRaw();
+        if (!block) return false;
         const unpacked = unpackCalBlock(block);
         if (!unpacked) return false;
         setCurrentCal(unpacked.cals);
@@ -101,16 +113,50 @@ const VcpCalVisualizer: React.FC<DeviceVisualizerProps> = ({ deviceKey, action }
         }
         const cals = newCal as VcpChannelCal[];
         const writePrefix = action?.w || '3800';   // WRITE_CAL opcode + offset 0
-        const blockHex = bytesToHex(packCalBlock(cals));
+        const expected = packCalBlock(cals);
+        const blockHex = bytesToHex(expected);
         // Synthetic write-only actions: sendAction with no 't' sends 'w' verbatim
         const writeAction: DeviceTypeAction = { n: 'vcpcal_write', w: writePrefix + blockHex };
         const saveAction: DeviceTypeAction = { n: 'vcpcal_save', w: RSAO_SAVE_CMD_HEX };
-        setStatus('Writing...');
-        const wrOk = await deviceManager.sendAction(deviceKey, writeAction, [0]);
-        if (!wrOk) {
-            setStatus('Cal block write failed');
+
+        // Write into the staging block, then read it back and compare BEFORE saving.
+        //
+        // I2C writes are unprotected: the slave ACKs every byte regardless of content,
+        // so a corrupted WRITE_CAL is accepted silently - and unlike a corrupted sample,
+        // once saved it is persistent. WRITE_CAL only touches the RAM staging copy, so
+        // verifying before the save means a corrupted block never reaches flash.
+        // The read-back is itself CRC-protected (CONFIG declares L=16), so a corrupt
+        // *read* cannot mask a bad write by coincidentally matching.
+        //
+        // A mismatch is retried once - the whole point is that the corruption is
+        // transient - and only then reported as a failure.
+        let verified = false;
+        let unverifiable = false;
+        for (let attempt = 0; attempt < 2 && !verified; attempt++) {
+            setStatus(attempt === 0 ? 'Writing...' : 'Write mismatch - retrying...');
+            const wrOk = await deviceManager.sendAction(deviceKey, writeAction, [0]);
+            if (!wrOk) {
+                setStatus('Cal block write failed');
+                return;
+            }
+            const readBack = await readCalBlockRaw();
+            if (!readBack) {
+                // Older firmware without cmdraw read-back: proceed but say so, rather
+                // than blocking calibration on a device that cannot be verified.
+                unverifiable = true;
+                break;
+            }
+            verified = readBack.length === expected.length && readBack.every((b, i) => b === expected[i]);
+            if (!verified) {
+                const at = readBack.findIndex((b, i) => b !== expected[i]);
+                console.warn(`vcpcal read-back mismatch at byte ${at}: wrote 0x${expected[at]?.toString(16)} read 0x${readBack[at]?.toString(16)}`);
+            }
+        }
+        if (!verified && !unverifiable) {
+            setStatus('Cal block read-back did not match what was written - NOT saved. Check the I2C bus and try again.');
             return;
         }
+
         const saveOk = await deviceManager.sendAction(deviceKey, saveAction, [0]);
         if (!saveOk) {
             setStatus('Save command failed');
@@ -122,7 +168,9 @@ const VcpCalVisualizer: React.FC<DeviceVisualizerProps> = ({ deviceKey, action }
         try { localStorage.setItem(storageKey(deviceKey), JSON.stringify(cals)); } catch { /* non-fatal */ }
         setFitK(Array(VCP_NUM_CHANNELS).fill('1'));
         setFitC(Array(VCP_NUM_CHANNELS).fill('0'));
-        setStatus('Calibration written and saved. Re-measure: a new fit should now be ~y=x.');
+        setStatus(unverifiable
+            ? 'Calibration written and saved, but NOT verified (firmware without cmdraw read-back). Re-measure: a new fit should now be ~y=x.'
+            : 'Calibration written, verified by read-back, and saved. Re-measure: a new fit should now be ~y=x.');
     };
 
     const handleResetCurrent = () => {
