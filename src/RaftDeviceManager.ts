@@ -1322,6 +1322,8 @@ export class DeviceManager implements RaftDeviceMgrIF{
                 }
                 const msgRslt = await msgHandler.sendRICRESTURL<RaftOKFail>(cmd);
                 const ok = msgRslt.rslt === 'ok';
+                if (ok)
+                    this.reseedSampleTimeline(deviceKey, sampleRateHz);
                 return { ok, requestedRateHz: sampleRateHz, actualRateHz: sampleRateHz, intervalUs, numSamples, error: ok ? undefined : `Firmware returned: ${msgRslt.rslt}` };
             } catch (error) {
                 return { ok: false, requestedRateHz: sampleRateHz, actualRateHz: sampleRateHz, intervalUs, numSamples, error: `${error}` };
@@ -1397,10 +1399,36 @@ export class DeviceManager implements RaftDeviceMgrIF{
             }
             const msgRslt = await msgHandler.sendRICRESTURL<RaftOKFail>(cmd);
             const ok = msgRslt.rslt === 'ok';
+            if (ok)
+                this.reseedSampleTimeline(deviceKey, actualRate);
             return { ok, requestedRateHz: sampleRateHz, actualRateHz: actualRate, intervalUs, numSamples, error: ok ? undefined : `Firmware returned: ${msgRslt.rslt}` };
         } catch (error) {
             return { ok: false, requestedRateHz: sampleRateHz, actualRateHz: actualRate, intervalUs, numSamples, error: `${error}` };
         }
+    }
+
+    ////////////////////////////////////////////////////////////////////////////
+    // Re-seed the sample-timestamp model after a sample-rate change
+    //
+    // Per-sample timestamps are reconstructed by an EMA in RaftAttributeHandler,
+    // because a poll result carries several samples but only one poll timestamp. That
+    // EMA converges on the observed cadence, and after ~20 polls its gain drops to 0.05
+    // - a ~20-poll time constant. Nothing reset it on a rate change, so a change (say
+    // 500 -> 1000 SPS) left the model decaying from the OLD interval for seconds:
+    // measured on a VCP, 1000 SPS read as ~897 SPS and 500 SPS as ~420 SPS, i.e. the
+    // time axis was wrong by 10-18% while the sample VALUES were exactly right.
+    //
+    // We know the new interval exactly - we just asked for it - so seed it directly and
+    // put the gain back to its fast value rather than letting the model rediscover it.
+    ////////////////////////////////////////////////////////////////////////////
+
+    private reseedSampleTimeline(deviceKey: string, rateHz: number): void {
+        const timeline = this._devicesState[deviceKey]?.deviceTimeline;
+        if (!timeline || !(rateHz > 0))
+            return;
+        timeline.emaIntervalUs = 1000000 / rateHz;
+        timeline.emaCalibrationPolls = 0;   // restore the fast EMA gain (0.3)
+        timeline.emaCalibrated = false;     // re-anchor on the next poll timestamp
     }
 
     ////////////////////////////////////////////////////////////////////////////

@@ -215,8 +215,13 @@ export default class AttributeHandler {
         const timeIncUs: number = pollRespMetadata.us ? pollRespMetadata.us : 1000;
 
         if (!deviceTimeline.emaCalibrated) {
-            // Cold start: anchor so that sample 0 gets the poll timestamp
-            deviceTimeline.emaIntervalUs = timeIncUs;
+            // Cold start: anchor so that sample 0 gets the poll timestamp.
+            // Respect an interval already seeded by a caller that knows the rate exactly
+            // (DeviceManager.setSampleRate does this after a rate change). A freshly
+            // created timeline has emaIntervalUs 0, so with no seed this still falls back
+            // to the record's `us` - or the default when the record does not declare one.
+            if (!(deviceTimeline.emaIntervalUs > 0))
+                deviceTimeline.emaIntervalUs = timeIncUs;
             deviceTimeline.emaLastSampleTimeUs = timestampUs - deviceTimeline.emaIntervalUs;
             deviceTimeline.emaPrevPollTimeUs = timestampUs;
             deviceTimeline.emaCalibrated = true;
