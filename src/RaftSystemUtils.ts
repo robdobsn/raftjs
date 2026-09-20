@@ -27,6 +27,7 @@ import {
   RaftSubscriptionUpdateResponse,
   RaftSysModInfoBLEMan,
   RaftSystemInfo,
+  RaftWifiPauseResp,
   RaftWifiScanOptions,
   RaftWifiScanOutcome,
   RaftWifiScanResults,
@@ -508,16 +509,33 @@ export default class RaftSystemUtils {
    */
   async pauseWifiConnection(pause: boolean): Promise<boolean> {
     try {
-      if (pause) {
-        await this._msgHandler.sendRICRESTURL<RaftOKFail>("wifipause/pause");
-      } else {
-        await this._msgHandler.sendRICRESTURL<RaftOKFail>("wifipause/resume");
-      }
+      const resp = await this._msgHandler.sendRICRESTURL<RaftOKFail>(
+        pause ? "wifipause/pause" : "wifipause/resume"
+      );
+      return !!resp && resp.rslt === "ok";
     } catch (error) {
-      RaftLog.debug(`RaftSystemUtils wifiConnect wifi pause ${error}`);
-      return true;
+      RaftLog.debug(`RaftSystemUtils pauseWifiConnection unsuccessful ${error}`);
     }
     return false;
+  }
+
+  /**
+   * Check if the Wifi connection is paused (without changing whether it is paused)
+   *
+   *  @return boolean - true if paused, false if not paused, null if not known
+   *
+   */
+  async isWifiConnectionPaused(): Promise<boolean | null> {
+    try {
+      // The wifipause API reports the pause state whatever the operation and only changes it
+      // for the pause and resume operations
+      const resp = await this._msgHandler.sendRICRESTURL<RaftWifiPauseResp>("wifipause/status");
+      if (resp && resp.rslt === "ok" && resp.isPaused !== undefined)
+        return resp.isPaused !== 0;
+    } catch (error) {
+      RaftLog.debug(`RaftSystemUtils isWifiConnectionPaused unsuccessful ${error}`);
+    }
+    return null;
   }
 
   /**
@@ -645,19 +663,40 @@ export default class RaftSystemUtils {
    *  Note that a WiFi connection to the device is generally unresponsive while the device is
    *  scanning so, over WiFi, the progress callback may not be called at all and the results
    *  arrive when the scan ends. Over BLE or serial progress is reported throughout the scan.
-   *  A scan can't be started while WiFi is paused (see pauseWifiConnection()).
    *
-   *  @param options - optional progress callback, poll interval, timeout and start retry
+   *  A scan can't be started while WiFi is paused (as it is on some systems while BLE is
+   *  connected). With the resumeWifiIfPaused option WiFi is resumed for the scan if it is
+   *  paused and then paused again when the scan ends (whether or not it was successful).
+   *
+   *  @param options - optional progress callback, poll interval, timeout, start retry and
+   *                   resume WiFi if paused
    *  @return RaftWifiScanOutcome - ok is true if the scan completed and wifi contains the results
    *
    */
   async wifiScan(options: RaftWifiScanOptions = {}): Promise<RaftWifiScanOutcome> {
     if (!this._wifiScanPromise) {
-      this._wifiScanPromise = this._wifiScanPerform(options).finally(() => {
+      this._wifiScanPromise = this._wifiScanWithResume(options).finally(() => {
         this._wifiScanPromise = null;
       });
     }
     return this._wifiScanPromise;
+  }
+
+  private async _wifiScanWithResume(options: RaftWifiScanOptions): Promise<RaftWifiScanOutcome> {
+    // Resume WiFi if required and it is paused
+    let wifiResumed = false;
+    if (options.resumeWifiIfPaused && (await this.isWifiConnectionPaused())) {
+      RaftLog.debug(`RaftSystemUtils wifiScan resuming WiFi for scan`);
+      wifiResumed = await this.pauseWifiConnection(false);
+    }
+    try {
+      const outcome = await this._wifiScanPerform(options);
+      return wifiResumed ? { ...outcome, wifiResumed } : outcome;
+    } finally {
+      // Restore the paused state
+      if (wifiResumed && !(await this.pauseWifiConnection(true)))
+        RaftLog.warn(`RaftSystemUtils wifiScan failed to pause WiFi again after scan`);
+    }
   }
 
   private async _wifiScanPerform(options: RaftWifiScanOptions): Promise<RaftWifiScanOutcome> {

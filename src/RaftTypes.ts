@@ -341,6 +341,8 @@ export type RaftWifiScanOptions = {
   timeoutMs?: number;                   // overall timeout - default 15000
   retryStart?: boolean;                 // retry if the scan can't be started because WiFi
                                         // is busy (e.g. STA connecting) - default true
+  resumeWifiIfPaused?: boolean;         // if WiFi is paused (e.g. while BLE is connected) resume
+                                        // it for the scan and pause it again afterwards - default false
 };
 
 // Outcome of a RaftSystemUtils.wifiScan() operation
@@ -350,6 +352,15 @@ export type RaftWifiScanOutcome = {
   legacyFirmware: boolean;          // true if the firmware doesn't report scan status
   scan?: RaftWifiScanStatus;        // final scan status (not available from legacy firmware)
   error?: string;                   // reason if !ok
+  wifiResumed?: boolean;            // true if WiFi was paused and was resumed for the scan (and
+                                    // paused again afterwards) - see resumeWifiIfPaused
+};
+
+// Response from the wifipause API
+export type RaftWifiPauseResp = {
+  req: string;
+  rslt: string;
+  isPaused?: number;
 };
 
 export type PystatusMsgType = {

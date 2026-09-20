@@ -49,9 +49,10 @@ async function main() {
     if (scanIdx > 0) await new Promise((r) => setTimeout(r, 1500));
     console.log(`\n== scan ${scanIdx + 1} of ${NUM_SCANS}`);
     const outcome = await systemUtils.wifiScan({
+      resumeWifiIfPaused: true,
       onProgress: (p) => console.log(`   progress ${p.elapsedMs}ms legacy=${p.legacyFirmware} scan=${JSON.stringify(p.scan)} prevScanWifi=${p.prevScanWifi.length}`),
     });
-    console.log(`   outcome ok=${outcome.ok} legacy=${outcome.legacyFirmware} error=${outcome.error} scan=${JSON.stringify(outcome.scan)}`);
+    console.log(`   outcome ok=${outcome.ok} legacy=${outcome.legacyFirmware} error=${outcome.error} wifiResumed=${outcome.wifiResumed} scan=${JSON.stringify(outcome.scan)}`);
     for (const ap of outcome.wifi) {
       console.log(`   ${ap.ssid.padEnd(32)} ${String(ap.rssi).padStart(4)}dBm ch${String(ap.ch1).padEnd(3)} ${ap.auth.padEnd(14)} ${ap.bssid}${ap.new ? " NEW" : ""}`);
     }

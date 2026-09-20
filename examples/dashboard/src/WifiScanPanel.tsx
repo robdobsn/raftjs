@@ -29,7 +29,7 @@ export default function WifiScanPanel() {
   const [scanning, setScanning] = useState(false);
   const [scanStartMs, setScanStartMs] = useState(0);
   const [scanElapsedMs, setScanElapsedMs] = useState(0);
-  const [resumeWifiFirst, setResumeWifiFirst] = useState(false);
+  const [resumeWifiIfPaused, setResumeWifiIfPaused] = useState(true);
   const [statusText, setStatusText] = useState("");
   const [statusIsError, setStatusIsError] = useState(false);
   const [logLines, setLogLines] = useState<string[]>([]);
@@ -73,13 +73,10 @@ export default function WifiScanPanel() {
     setLogLines([]);
 
     // WiFi is paused by the firmware while BLE is connected and a scan can't be started while paused
-    if (resumeWifiFirst) {
-      log("resuming WiFi");
-      await systemUtils.pauseWifiConnection(false);
-    }
-
+    // so wifiScan can resume it for the scan and pause it again afterwards
     log("wifiScan started");
     const outcome: RaftWifiScanOutcome = await systemUtils.wifiScan({
+      resumeWifiIfPaused,
       onProgress: (progress: RaftWifiScanProgress) => {
         if (!mountedRef.current)
           return;
@@ -91,6 +88,8 @@ export default function WifiScanPanel() {
     if (!mountedRef.current)
       return;
 
+    if (outcome.wifiResumed)
+      log("WiFi was paused - resumed for the scan and paused again");
     log(`${outcome.ok ? "complete" : "FAILED"}: ${outcome.error ? outcome.error + " - " : ""}${formatScanStatus(outcome.scan)}`);
     if (outcome.ok) {
       const scan = outcome.scan;
@@ -112,14 +111,14 @@ export default function WifiScanPanel() {
         <button className="action-button" onClick={handleScan} disabled={scanning}>
           {scanning ? `Scanning ... ${(scanElapsedMs / 1000).toFixed(1)}s` : "Scan WiFi"}
         </button>
-        <label className="wifi-scan-option" title="WiFi is paused while BLE is connected and a scan can't be started while it is paused">
+        <label className="wifi-scan-option" title="WiFi is paused while BLE is connected and a scan can't be started while it is paused - if it is paused resume it for the scan and pause it again afterwards">
           <input
             type="checkbox"
-            checked={resumeWifiFirst}
+            checked={resumeWifiIfPaused}
             disabled={scanning}
-            onChange={(e) => setResumeWifiFirst(e.target.checked)}
+            onChange={(e) => setResumeWifiIfPaused(e.target.checked)}
           />
-          Resume WiFi first
+          Resume WiFi if paused
         </label>
       </div>
       {statusText !== "" &&

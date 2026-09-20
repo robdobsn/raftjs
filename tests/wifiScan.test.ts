@@ -153,6 +153,65 @@ describe('wifiScan current firmware', () => {
     });
 });
 
+describe('wifiScan resumeWifiIfPaused', () => {
+    const SCAN_OK = {
+        'wifiscan/start': [{ req: 'wifiscan/start', scan: { state: 'scanning', id: 1, elapsedMs: 0 }, rslt: 'ok' }],
+        'wifiscan/results': [{ req: 'wifiscan/results', scan: { state: 'done', id: 1, durMs: 5, ageMs: 1, count: 1, found: 1, new: 0, lost: 0 }, wifi: [AP], rslt: 'ok' }],
+    };
+    const PAUSE_OK = {
+        'wifipause/resume': [{ req: 'wifipause/resume', isPaused: 0, rslt: 'ok' }],
+        'wifipause/pause': [{ req: 'wifipause/pause', isPaused: 1, rslt: 'ok' }],
+    };
+
+    test('paused WiFi is resumed for the scan and paused again afterwards', async () => {
+        const { systemUtils, sent } = makeSystemUtils({
+            ...SCAN_OK, ...PAUSE_OK,
+            'wifipause/status': [{ req: 'wifipause/status', isPaused: 1, rslt: 'ok' }],
+        });
+        const outcome = await systemUtils.wifiScan({ ...FAST, resumeWifiIfPaused: true });
+        expect(outcome).toMatchObject({ ok: true, wifi: [AP], wifiResumed: true });
+        expect(sent).toEqual(['wifipause/status', 'wifipause/resume', 'wifiscan/start', 'wifiscan/results', 'wifipause/pause']);
+    });
+
+    test('WiFi is paused again when the scan fails', async () => {
+        const { systemUtils, sent } = makeSystemUtils({
+            ...PAUSE_OK,
+            'wifipause/status': [{ req: 'wifipause/status', isPaused: 1, rslt: 'ok' }],
+            'wifiscan/start': [{ req: 'wifiscan/start', scan: { state: 'failed', id: 1, durMs: 0, ageMs: 0, err: 'ESP_ERR_WIFI_NOT_STARTED' }, rslt: 'fail' }],
+        });
+        const outcome = await systemUtils.wifiScan({ ...FAST, resumeWifiIfPaused: true });
+        expect(outcome).toMatchObject({ ok: false, wifiResumed: true });
+        expect(sent).toEqual(['wifipause/status', 'wifipause/resume', 'wifiscan/start', 'wifipause/pause']);
+    });
+
+    test('WiFi which is not paused is left alone', async () => {
+        const { systemUtils, sent } = makeSystemUtils({
+            ...SCAN_OK,
+            'wifipause/status': [{ req: 'wifipause/status', isPaused: 0, rslt: 'ok' }],
+        });
+        const outcome = await systemUtils.wifiScan({ ...FAST, resumeWifiIfPaused: true });
+        expect(outcome.ok).toBe(true);
+        expect(outcome.wifiResumed).toBeUndefined();
+        expect(sent).toEqual(['wifipause/status', 'wifiscan/start', 'wifiscan/results']);
+    });
+
+    test('unknown pause state is left alone', async () => {
+        const { systemUtils, sent } = makeSystemUtils({
+            ...SCAN_OK,
+            'wifipause/status': [new Error('msg timeout')],
+        });
+        const outcome = await systemUtils.wifiScan({ ...FAST, resumeWifiIfPaused: true });
+        expect(outcome.ok).toBe(true);
+        expect(sent).toEqual(['wifipause/status', 'wifiscan/start', 'wifiscan/results']);
+    });
+
+    test('pause state is not touched without the option', async () => {
+        const { systemUtils, sent } = makeSystemUtils(SCAN_OK);
+        await systemUtils.wifiScan(FAST);
+        expect(sent).toEqual(['wifiscan/start', 'wifiscan/results']);
+    });
+});
+
 describe('wifiScan older firmware', () => {
     test('fail results mean in progress and results are read only once', async () => {
         const { systemUtils, sent } = makeSystemUtils({
@@ -198,6 +257,20 @@ describe('wifiScanStart / wifiScanResults', () => {
         expect(await ok.systemUtils.wifiScanStart()).toBe(true);
         const fail = makeSystemUtils({ 'wifiscan/start': [{ req: 'wifiscan/start', rslt: 'fail' }] });
         expect(await fail.systemUtils.wifiScanStart()).toBe(false);
+    });
+
+    test('pauseWifiConnection returns true on success and false on failure', async () => {
+        const ok = makeSystemUtils({
+            'wifipause/pause': [{ req: 'wifipause/pause', isPaused: 1, rslt: 'ok' }],
+            'wifipause/resume': [{ req: 'wifipause/resume', isPaused: 0, rslt: 'ok' }],
+        });
+        expect(await ok.systemUtils.pauseWifiConnection(true)).toBe(true);
+        expect(await ok.systemUtils.pauseWifiConnection(false)).toBe(true);
+        expect(ok.sent).toEqual(['wifipause/pause', 'wifipause/resume']);
+        const failed = makeSystemUtils({ 'wifipause/pause': [{ req: 'wifipause/pause', rslt: 'fail' }] });
+        expect(await failed.systemUtils.pauseWifiConnection(true)).toBe(false);
+        const noComms = makeSystemUtils({ 'wifipause/pause': [new Error('msg timeout')] });
+        expect(await noComms.systemUtils.pauseWifiConnection(true)).toBe(false);
     });
 
     test('wifiScanResults returns false on comms failure', async () => {
