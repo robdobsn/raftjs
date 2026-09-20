@@ -280,9 +280,35 @@ export interface Dictionary<T> {
   [key: string]: T;
 }
 
+// WiFi scan state reported by firmware (RaftCore versions after 1.54.1)
+export type RaftWifiScanState = 'idle' | 'scanning' | 'done' | 'failed';
+
+// WiFi scan status - the "scan" object in wifiscan/start and wifiscan/results responses.
+// Not present in responses from older firmware (RaftCore 1.54.1 and earlier)
+export type RaftWifiScanStatus = {
+  state: RaftWifiScanState;
+  id: number;           // scan counter - incremented each time a new scan is started
+  elapsedMs?: number;   // state scanning: time since the scan started
+  durMs?: number;       // state done/failed: how long the scan took
+  ageMs?: number;       // state done/failed: time since the scan ended
+  err?: string;         // state failed: reason
+  count?: number;       // number of APs in the wifi list (last completed scan)
+  found?: number;       // number of APs found by the WiFi driver (may exceed count)
+  new?: number;         // number of BSSIDs not present in the previous completed scan
+  lost?: number;        // number of BSSIDs from the previous completed scan no longer present
+};
+
+export type RaftWifiScanStartResp = {
+  req: string;
+  rslt: string;
+  scan?: RaftWifiScanStatus;
+  error?: string;
+};
+
 export type RaftWifiScanResults = {
   req: string;
   rslt: string;
+  scan?: RaftWifiScanStatus;
   wifi: WifiScanWifiItem[];
 };
 
@@ -295,6 +321,35 @@ export type WifiScanWifiItem = {
   bssid: string;
   pair: string;
   group: string;
+  new?: number;         // 1 if this BSSID was not present in the previous completed scan
+};
+
+// Progress of a RaftSystemUtils.wifiScan() operation
+export type RaftWifiScanProgress = {
+  elapsedMs: number;                // time since wifiScan() was called
+  legacyFirmware: boolean;          // true if the firmware doesn't report scan status
+  scan?: RaftWifiScanStatus;        // scan status (not available from legacy firmware)
+  prevScanWifi: WifiScanWifiItem[]; // results of the previous completed scan (if any) which
+                                    // can be shown until the new results are available
+};
+
+export type RaftWifiScanProgressCB = (progress: RaftWifiScanProgress) => void;
+
+export type RaftWifiScanOptions = {
+  onProgress?: RaftWifiScanProgressCB;  // called after each poll while the scan is in progress
+  pollIntervalMs?: number;              // default 750
+  timeoutMs?: number;                   // overall timeout - default 15000
+  retryStart?: boolean;                 // retry if the scan can't be started because WiFi
+                                        // is busy (e.g. STA connecting) - default true
+};
+
+// Outcome of a RaftSystemUtils.wifiScan() operation
+export type RaftWifiScanOutcome = {
+  ok: boolean;
+  wifi: WifiScanWifiItem[];         // results of the scan (empty if !ok)
+  legacyFirmware: boolean;          // true if the firmware doesn't report scan status
+  scan?: RaftWifiScanStatus;        // final scan status (not available from legacy firmware)
+  error?: string;                   // reason if !ok
 };
 
 export type PystatusMsgType = {

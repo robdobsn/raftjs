@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import './styles.css';
 import { RaftSystemInfo } from "../../../src/main";
 import ConnManager from "./ConnManager";
+import WifiScanPanel from "./WifiScanPanel";
 
 const connManager = ConnManager.getInstance();
 
@@ -64,6 +65,7 @@ export default function StatusPanel() {
               </div>
             </div>
         }
+        <WifiScanPanel />
       </div>
     </div>
   );

@@ -27,7 +27,11 @@ import {
   RaftSubscriptionUpdateResponse,
   RaftSysModInfoBLEMan,
   RaftSystemInfo,
+  RaftWifiScanOptions,
+  RaftWifiScanOutcome,
   RaftWifiScanResults,
+  RaftWifiScanStartResp,
+  RaftWifiScanStatus,
 } from "./RaftTypes";
 
 export default class RaftSystemUtils {
@@ -44,6 +48,9 @@ export default class RaftSystemUtils {
   private _wifiConnStatus: RaftWifiConnStatus = new RaftWifiConnStatus();
   private _defaultWiFiHostname = "Raft";
   private _maxSecsToWaitForWiFiConn = 20;
+
+  // WiFi scan in progress (see wifiScan())
+  private _wifiScanPromise: Promise<RaftWifiScanOutcome> | null = null;
 
   // Publish topic index/name lookup tables (session scoped)
   private _pubTopicIdxToName: { [idx: number]: string } = {};
@@ -594,15 +601,22 @@ export default class RaftSystemUtils {
   async wifiScanStart(): Promise<boolean> {
     try {
       RaftLog.debug(`RaftSystemUtils wifiScanStart`);
-      await this._msgHandler.sendRICRESTURL<RaftOKFail>("wifiscan/start");
-      return true;
+      const resp = await this._msgHandler.sendRICRESTURL<RaftWifiScanStartResp>("wifiscan/start");
+      return !!resp && resp.rslt === "ok";
     } catch (error) {
       RaftLog.debug(`RaftSystemUtils wifiScanStart unsuccessful ${error}`);
     }
     return false;
   }
+
   /**
    *  WiFiScan get results
+   *
+   *  Current firmware returns rslt "ok" with a scan status object (scan.state is scanning, done
+   *  or failed) and the cached results of the last completed scan. Older firmware (RaftCore 1.54.1
+   *  and earlier) returns rslt "fail" while the scan is in progress and has no scan status object -
+   *  the results should only be requested once after the scan completes as they are not cached.
+   *  See wifiScan() for a method which handles the whole scan with either kind of firmware.
    *
    *  @return boolean - false if unsuccessful, otherwise the results of the promise
    *
@@ -610,13 +624,135 @@ export default class RaftSystemUtils {
   async wifiScanResults(): Promise<boolean | RaftOKFail | RaftWifiScanResults> {
     try {
       RaftLog.debug(`RaftSystemUtils wifiScanResults`);
-      return this._msgHandler.sendRICRESTURL<RaftOKFail | RaftWifiScanResults>(
+      return await this._msgHandler.sendRICRESTURL<RaftOKFail | RaftWifiScanResults>(
         "wifiscan/results"
       );
     } catch (error) {
       RaftLog.debug(`RaftSystemUtils wifiScanResults unsuccessful ${error}`);
     }
     return false;
+  }
+
+  /**
+   *  WiFiScan - perform a complete scan: start the scan, poll until the results are available
+   *  (polling is only active for the duration of the scan) and return them. Works with current
+   *  firmware (which reports scan status) and older firmware (which fails results requests
+   *  until the scan is complete).
+   *
+   *  If a scan started by this method is already in progress then the outcome of that scan is
+   *  returned (and the options, including onProgress, of the later call are ignored).
+   *
+   *  Note that a WiFi connection to the device is generally unresponsive while the device is
+   *  scanning so, over WiFi, the progress callback may not be called at all and the results
+   *  arrive when the scan ends. Over BLE or serial progress is reported throughout the scan.
+   *  A scan can't be started while WiFi is paused (see pauseWifiConnection()).
+   *
+   *  @param options - optional progress callback, poll interval, timeout and start retry
+   *  @return RaftWifiScanOutcome - ok is true if the scan completed and wifi contains the results
+   *
+   */
+  async wifiScan(options: RaftWifiScanOptions = {}): Promise<RaftWifiScanOutcome> {
+    if (!this._wifiScanPromise) {
+      this._wifiScanPromise = this._wifiScanPerform(options).finally(() => {
+        this._wifiScanPromise = null;
+      });
+    }
+    return this._wifiScanPromise;
+  }
+
+  private async _wifiScanPerform(options: RaftWifiScanOptions): Promise<RaftWifiScanOutcome> {
+    const pollIntervalMs = options.pollIntervalMs ?? 750;
+    const timeoutMs = options.timeoutMs ?? 15000;
+    const retryStart = options.retryStart ?? true;
+    const startMs = Date.now();
+    const timeLeft = () => Date.now() - startMs < timeoutMs;
+    const delay = () => new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+    const failed = (error: string, legacyFirmware: boolean, scan?: RaftWifiScanStatus): RaftWifiScanOutcome => {
+      RaftLog.debug(`RaftSystemUtils wifiScan unsuccessful ${error}`);
+      return { ok: false, wifi: [], legacyFirmware, scan, error };
+    };
+
+    // The link to the device may be unresponsive for the duration of the scan (e.g. a WiFi connection
+    // while the radio is scanning) so responses can be delayed by several seconds. The message timeout
+    // is set so that messages are not automatically retried during the operation - a retried start
+    // arriving just after the scan completes would start another scan - and the overall timeout is
+    // enforced here instead
+    const send = <T>(url: string): Promise<T> => {
+      const sendPromise = this._msgHandler.sendRICRESTURL<T>(url, undefined, Math.max(timeoutMs, 2000));
+      sendPromise.catch(() => undefined);
+      let timer: ReturnType<typeof setTimeout>;
+      const timeoutPromise = new Promise<T>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("no response")), Math.max(timeoutMs - (Date.now() - startMs), 1));
+      });
+      return Promise.race([sendPromise, timeoutPromise]).finally(() => clearTimeout(timer));
+    };
+
+    // Start the scan
+    let startResp: RaftWifiScanStartResp;
+    for (;;) {
+      try {
+        RaftLog.debug(`RaftSystemUtils wifiScan start`);
+        startResp = await send<RaftWifiScanStartResp>("wifiscan/start");
+      } catch (error) {
+        return failed(`scan start failed ${error}`, false);
+      }
+      if (startResp && startResp.rslt === "ok")
+        break;
+
+      // The WiFi driver won't start a scan while a STA connection attempt is in progress - current
+      // firmware reports this as a "busy" error and older firmware as a fail with no explanation
+      const startErr = startResp?.scan?.err ?? startResp?.error;
+      const isBusy = startResp?.rslt === "fail" && (startErr === undefined || startErr.startsWith("busy"));
+      if (!retryStart || !isBusy || !timeLeft())
+        return failed(startErr ?? "scan start failed", !startResp?.scan, startResp?.scan);
+      await delay();
+    }
+    const scanId = startResp.scan?.id;
+
+    // Poll for results - the first poll is immediate so that the results of the previous scan
+    // (if any) are available to the progress callback straight away
+    let lastError = "timeout";
+    while (timeLeft()) {
+      let resp: RaftWifiScanResults | null = null;
+      try {
+        resp = await send<RaftWifiScanResults>("wifiscan/results");
+      } catch (error) {
+        // Keep polling as the message may simply have been lost
+        lastError = `timeout (${error})`;
+      }
+      if (!resp) {
+        await delay();
+        continue;
+      }
+      const scan = resp.scan;
+      const wifi = Array.isArray(resp.wifi) ? resp.wifi : [];
+      const legacyFirmware = !scan;
+      if (scan) {
+        // Current firmware - scan status indicates progress. A status that isn't for the scan
+        // that was started (or a later one) means that scan has been lost (e.g. device restart)
+        if ((scan.state !== "scanning") && ((scan.state === "idle") || ((scanId !== undefined) && (scan.id < scanId))))
+          return failed("scan lost", false, scan);
+        if (scan.state === "done")
+          return { ok: true, wifi, legacyFirmware, scan };
+        if (scan.state === "failed")
+          return failed(scan.err ?? "scan failed", false, scan);
+      } else if (resp.rslt === "ok") {
+        // Older firmware - results are available (and must not be requested again as they
+        // are not cached by the firmware)
+        return { ok: true, wifi, legacyFirmware };
+      }
+
+      // Scan in progress (older firmware indicates this with a fail result)
+      if (options.onProgress) {
+        try {
+          options.onProgress({ elapsedMs: Date.now() - startMs, legacyFirmware, scan, prevScanWifi: scan ? wifi : [] });
+        } catch (error) {
+          RaftLog.warn(`RaftSystemUtils wifiScan onProgress callback failed ${error}`);
+        }
+      }
+      await delay();
+    }
+    return failed(lastError, scanId === undefined);
   }
 
   getCachedSystemInfo(): RaftSystemInfo | null {
