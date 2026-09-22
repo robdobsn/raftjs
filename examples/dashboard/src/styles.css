@@ -77,6 +77,24 @@ h1 {
     font-size: 1rem;
 }
 
+.action-button:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+}
+
+.conn-status {
+    margin-bottom: 10px;
+    font-size: 0.95rem;
+}
+
+.conn-status-error {
+    color: #ff6b6b;
+}
+
+.conn-status-warn {
+    color: #ffb84d;
+}
+
 .settings-item {
     display: flex;
     justify-content: space-between;

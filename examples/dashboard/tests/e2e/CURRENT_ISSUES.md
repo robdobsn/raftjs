@@ -268,10 +268,101 @@ a device reboot that cleared the device clock. Other connect-time setup
 (system-type `setup()`, capability resolution) is intentionally not repeated on
 a channel-only reconnect.
 
+## 8. Second WebSocket connect and every retry use a different endpoint from the first connect
+
+- **Status:** Fixed (validated on real hardware over Wi-Fi)
+- **Evidence:** Real hardware reproduced (dashboard and a physical Axiom); real hardware validated
+- **Scenario:** `tests/e2e/ws-reconnect.mjs` in the RaftJS root (Node, no browser), plus
+  `RaftConnector WebSocket endpoint selection` in `src/RaftConnector.test.ts`
+
+### Observed behaviour
+
+Connect over WebSocket, disconnect, then connect again: the second connect fails at once
+(`WebSocket connection to 'ws://<host>/wsjson' failed`, close code 1006) and the dashboard shows
+nothing at all. A third attempt succeeds, and the pattern alternates.
+
+### Cause
+
+`connect()` resolves the system type only after the channel is up, so the first connect passes
+empty `connectorOptions` and `RaftChannelWebSocket` falls back to the `ws` suffix. `disconnect()`
+left `_systemType` set, so the next `connect()` - and every `_retryConnectionLoop()` attempt after
+a lost link - passed the previous session's options. The dashboard's Generic and Cog system types
+declared `wsSuffix: "wsjson"`, a path the firmware does not serve (its WebSocket handler matches
+the path exactly). The failure branch of `connect()` nulls `_systemType`, hence the alternation.
+
+`wsjson` only ever existed in early Cog firmware, as a RICJSON *text* socket. raftjs frames every
+message as binary RICSerial and ignores text frames, so it could not have used that endpoint even
+where it was served.
+
+### Impact
+
+- An explicit reconnect silently fails every other attempt.
+- Automatic retry after a real Wi-Fi drop can never succeed for a system type whose `wsSuffix`
+  differs from `ws`; the retry window simply expires.
+- The dashboard ignored `CONN_CONNECTION_FAILED` and discarded the `connect()` promise, so the
+  user saw no sign that Connect had been pressed.
+
+### Resolution
+
+- `connect()` clears `_systemType` before connecting, so every explicit connect starts without a
+  system type exactly as the first one does.
+- After a successful WebSocket connect the connector pins the channel's resolved URL as its
+  locator. A complete `ws://` URL is authoritative in `RaftChannelWebSocket.connect()`, so retries
+  return to exactly the endpoint that connected whatever the system type declares.
+- The dashboard system types and the `tests/e2e` scripts declare `wsSuffix: "ws"`; `wsjson` no
+  longer appears in RaftJS. `ConnectorOptions.wsSuffix` documents that it cannot select the
+  endpoint for a bare-host locator - pass a complete URL instead.
+- The dashboard disables the Connect buttons and shows "Connecting…" during an attempt, reports a
+  failed attempt, and shows "Connection lost - retrying…" / "Reconnected - updates not restored"
+  for `CONN_ISSUE_DETECTED` / `CONN_RECOVERY_DEGRADED`.
+
+Validated against a physical Axiom over Wi-Fi: three connect/disconnect cycles and a retry after a
+dropped socket all connected to `ws://<host>/ws`. The two unit tests fail on the previous code.
+
+## 9. An explicit WebSocket disconnect is reported late, against the next connection
+
+- **Status:** Fixed (validated on real hardware over Wi-Fi)
+- **Evidence:** Real hardware reproduced (found while validating issue 8); real hardware validated
+- **Scenario:** `tests/e2e/ws-reconnect.mjs` (event-ordering checks), plus
+  `src/RaftChannelWebSocket.test.ts`
+
+### Observed behaviour
+
+`RaftChannelWebSocket.disconnect()` called `close()` and returned, leaving the socket's `onclose`
+handler attached and still the owner of the channel. The close event is asynchronous, so
+`CONN_DISCONNECTED` was delivered some tens of milliseconds *after* `disconnect()` had resolved.
+In back-to-back connect cycles it arrived inside the following `connect()`: the log shows
+`_wsConnect - closed code 1000` and `RaftSystemUtils information invalidated` between the new
+connect starting and its system info being read.
+
+### Impact
+
+- An application is told the connection it is currently establishing has disconnected.
+- `RaftSystemUtils.invalidate()` and the system type's `stateIsInvalid()` run against the new
+  session. Whether that discards freshly cached system info depends purely on timing.
+- A person pressing Disconnect then Connect is far too slow to hit this; a script, a test or an
+  application that reconnects programmatically is not.
+
+Issue 5's ownership check did not cover it: that guards a socket *replaced* within one channel,
+whereas here a new channel object is created and the old channel still owns its closing socket.
+
+### Resolution
+
+`disconnect()` now releases ownership (`_webSocket = null`) and detaches `onmessage` / `onclose`
+before closing the socket, then emits `CONN_DISCONNECTED` itself before returning - as the
+Simulated, WebSerial and native BLE channels already do. The late close event finds no handler.
+A close that was not requested (link lost, device reboot) is unchanged and still drives the retry
+path. `disconnect()` without an open socket reports nothing.
+
+Validated against a physical Axiom over Wi-Fi: each connect saw only `CONNECTING, CONNECTED`, and
+`DISCONNECTED` had been reported by the time `disconnect()` returned. The unit test for this fails
+on the previous code.
+
 ## Current automated coverage
 
 | Scenario | Transport | Hardware | Current result |
 |---|---|---|---|
+| `tests/e2e/ws-reconnect.mjs` (RaftJS root) - issues 8 and 9 | WebSocket | Physical Axiom (Wi-Fi) | Fixed - validated |
 | `marty-ble-write-size` | WebBLE | Physical Marty | Fixed - validated |
 | `marty-connect-disconnect-race` | WebBLE | Physical Marty | Fixed - validated |
 | `marty-reconnect-disconnect-race` | WebBLE | Physical Marty | Fixed - validated |
@@ -287,6 +378,13 @@ After adding the E2E suite:
 - RaftJS web and React Native builds passed.
 - Dashboard Parcel production build passed.
 - Real-Marty default BLE E2E suite: 4 passed, 0 failed.
+
+After the issue 8 and 9 fixes (2026-09-21, RaftJS 2.4.1 working tree):
+
+- RaftJS Jest: 13 suites and 178 tests passed.
+- RaftJS ESLint and web build passed.
+- `tests/e2e/ws-reconnect.mjs` passed against a physical Axiom over Wi-Fi.
+- The real-Marty browser suite was not re-run for this change.
 
 The dashboard also has pre-existing direct `tsc --noEmit` errors in chart,
 latency, settings, WebSocket typing, and platform-specific BLE module

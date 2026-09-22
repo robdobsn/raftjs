@@ -4,9 +4,94 @@ Scripts here talk to **real hardware over the network**. They are not run by jes
 `testMatch` only picks up `*.test.*` / `*.spec.*` under `src/`, so nothing in this directory
 runs in CI.
 
-They connect exactly as the dashboard example does: a WebSocket to `ws://<host>/wsjson`, a
-`devbin` subscription, and the same `DeviceManager` decode path. That matters — a bug found
-here is a bug a real client would hit.
+They connect exactly as the dashboard example does: a WebSocket to `ws://<host>/ws` (the
+firmware's RICSerial endpoint), a `devbin` subscription, and the same `DeviceManager` decode
+path. That matters — a bug found here is a bug a real client would hit.
+
+All of them load the built library, so run `npm run build` first, and run them from the raftjs
+directory.
+
+| Script | Purpose | Result |
+|---|---|---|
+| `ws-reconnect.mjs` | connect / disconnect / connect cycles and automatic retry after a dropped socket | pass / fail |
+| `wifi-scan.mjs` | run `RaftSystemUtils.wifiScan()` and print progress and results | pass / fail |
+| `observe-devices.mjs` | print what the device publishes: per-device sample counts, values, raw records | observation only |
+| `vcp-find-signal.mjs` | find which `RoboticalVCP` input a signal is on | observation only |
+
+---
+
+## `ws-reconnect.mjs`
+
+Checks that a WebSocket connection can be **re-established**, which a single connect never
+exercises:
+
+1. `initializeChannel` → `connect` → read system info → `disconnect`, repeated `NUM_CYCLES`
+   times, as pressing Connect / Disconnect in the dashboard does.
+2. The socket is then closed underneath the connector to simulate a lost link. The connector
+   must emit `CONN_ISSUE_DETECTED`, retry, emit `CONN_ISSUE_RESOLVED`, and answer a request over
+   the restored connection.
+
+Every connect and the retry must land on `ws://<host>/ws`. The cycles run back-to-back with no
+pause, which also checks event ordering: `CONN_DISCONNECTED` must have been reported by the time
+`disconnect()` returns, and a connect must see only `CONNECTING, CONNECTED` — the previous
+socket's close event arrives during the next connect and must not be reported against it.
+
+```
+AXIOM=192.168.86.136 node tests/e2e/ws-reconnect.mjs
+```
+
+Exit code `0` if every check passed, `1` otherwise.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `AXIOM` | 192.168.86.136 | host or IP of the device |
+| `NUM_CYCLES` | 3 | number of explicit connect cycles |
+| `RETRY_TIMEOUT_MS` | 20000 | how long to wait for the automatic retry to finish |
+
+### Why the system type declares a suffix nothing serves
+
+The script's system type sets `connectorOptions.wsSuffix` to a path no firmware serves. That is
+deliberate. The system type is only resolved once the channel is up, so its options are unknown
+for the first connect — and they must stay out of later connects and retries too. They once did
+not: the type left over from the previous session was applied to the second connect, which went
+to a different path from the first and failed, and every automatic retry failed the same way.
+A script that connects once cannot see this, which is how these tools declared an unserved
+suffix for months without noticing.
+
+---
+
+## `wifi-scan.mjs`
+
+Runs `RaftSystemUtils.wifiScan()` `NUM_SCANS` times (default 2) and prints each progress callback,
+the outcome and the access points found. Two scans are the useful minimum: the second shows the
+previous results being offered during the scan (`prevScanWifi`) and the `NEW` marker on BSSIDs
+that were not in the previous scan.
+
+```
+AXIOM=192.168.86.136 node tests/e2e/wifi-scan.mjs
+```
+
+Exit code `0` if every scan succeeded. Over WiFi the device does not answer while it scans, so
+expect few or no progress lines and a pause of a few seconds before the outcome — that is the
+device, not the script. It passes `resumeWifiIfPaused: true`, so it also works on a device whose
+WiFi is paused because a BLE client is connected.
+
+---
+
+## `observe-devices.mjs`
+
+Subscribes to `devbin`, dwells for `DWELL_MS` (default 12000) and then prints, for each device,
+its type, online state, sample count, last timestamp, stats and the last value of every
+attribute, plus a tally of the frames received by type and topic. While it runs it also dumps
+the first few **raw poll records** of the devices listed in `SIGS` at the top of the script
+(matched by address and device type index) — edit that table for the device under study.
+
+```
+AXIOM=192.168.86.136 SUB_RATE_HZ=20 node tests/e2e/observe-devices.mjs
+```
+
+It reports and always exits `0`; it is for looking at a device that is misbehaving, e.g. one
+that has stopped producing samples while still reported online.
 
 ---
 
@@ -92,8 +177,10 @@ Node has neither, so the script applies the same mapping jest does.
 
 ## Scope
 
-These tools **locate and characterise**; they do not gate anything. There is no pass/fail
-suite here, deliberately: a previous capture harness that drove a rate/mode matrix proved
+The measurement tools **locate and characterise**; they do not gate anything. Only
+`ws-reconnect.mjs` and `wifi-scan.mjs` return a pass/fail exit code, because a connection or a
+scan either works or it does not. There is no pass/fail suite for sampled data, deliberately: a
+previous capture harness that drove a rate/mode matrix proved
 unreliable above ~200 SPS — it under-collected where the dashboard did not — and a test that
 fails for its own reasons is worse than no test. The dashboard remains the reference client
 for high-rate work.

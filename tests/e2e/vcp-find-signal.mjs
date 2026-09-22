@@ -45,7 +45,7 @@ function makeSystemType() {
     defaultWiFiHostname: "Axiom",
     firmwareDestName: "ricfw",
     normalFileDestName: "fs",
-    connectorOptions: { wsSuffix: "wsjson" },
+    connectorOptions: { wsSuffix: "ws" },
     BLEServiceUUIDs: [], BLECmdUUID: "", BLERespUUID: "",
     capabilities: { tuning: {} },
     setup(s) { su = s; dm.setup(s); },

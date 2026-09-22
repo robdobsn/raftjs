@@ -334,6 +334,12 @@ export default class RaftConnector {
     this._retryIfLostDisconnectTime = null;
     this._retryIfLostIsConnected = false;
 
+    // Every explicit connect starts without a system type. The type is resolved
+    // below once the channel is up, so a type left over from a previous session
+    // must not influence how this channel connects (e.g. its wsSuffix would be
+    // applied to the second connect but not the first).
+    this._systemType = null;
+
     // Pin this connection's identity. disconnect() (or a newer connect())
     // nulls/replaces _raftChannel and bumps the generation while this method is
     // awaiting; every post-await stage must stop quietly when ownership is lost
@@ -363,6 +369,18 @@ export default class RaftConnector {
 
     if (connOk) {
       this._retryIfLostIsConnected = true;
+
+      // Pin the locator the channel actually connected with so that retries
+      // after a lost connection return to exactly the same endpoint. For a
+      // WebSocket this is the complete ws:// URL, which the channel treats as
+      // authoritative - without this a retry would rebuild the URL using the
+      // system type's connectorOptions, which were not known for this connect.
+      if (this._channelConnMethod === 'WebSocket') {
+        const connectedLocator = ownedChannel.getConnectedLocator();
+        if (typeof connectedLocator === 'string' && connectedLocator.length > 0) {
+          this._channelConnLocator = connectedLocator;
+        }
+      }
 
       // Resolve system type now that the channel is connected
       if (this._getSystemTypeCB) {

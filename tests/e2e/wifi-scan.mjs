@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Run RaftSystemUtils.wifiScan() against a real device over the wsjson WebSocket, printing the
+// Run RaftSystemUtils.wifiScan() against a real device over the /ws WebSocket, printing the
 // progress callbacks and the outcome. Scans twice by default so that the second scan shows the
 // previous results during the scan and the new/lost counts. Works with current firmware (scan
 // status object) and older firmware (results fail while the scan is in progress).
@@ -25,7 +25,7 @@ function makeSystemType() {
   const dm = new RaftDeviceManager();
   return {
     nameForDialogs: "Axiom (wifi scan)", defaultWiFiHostname: "Axiom", firmwareDestName: "ricfw",
-    normalFileDestName: "fs", connectorOptions: { wsSuffix: "wsjson" },
+    normalFileDestName: "fs", connectorOptions: { wsSuffix: "ws" },
     BLEServiceUUIDs: [], BLECmdUUID: "", BLERespUUID: "", capabilities: { tuning: {} },
     setup(s) { dm.setup(s); },
     subscribeForUpdates: async () => {},

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Observe what an Axiom publishes to a raftjs client (the same path the dashboard uses):
-// connect over the wsjson WebSocket, subscribe to devbin, dwell, then print per-device
+// connect over the /ws (RICSerial) WebSocket, subscribe to devbin, dwell, then print per-device
 // sample counts, last values and last timestamps. Run from the raftjs directory:
 //   AXIOM=192.168.86.136 node tests/e2e/observe-devices.mjs   (from the raftjs directory)
 import Module from "node:module";
@@ -51,7 +51,7 @@ function makeSystemType() {
   let su = null;
   return {
     nameForDialogs: "Axiom (observe)", defaultWiFiHostname: "Axiom", firmwareDestName: "ricfw",
-    normalFileDestName: "fs", connectorOptions: { wsSuffix: "wsjson" },
+    normalFileDestName: "fs", connectorOptions: { wsSuffix: "ws" },
     BLEServiceUUIDs: [], BLECmdUUID: "", BLERespUUID: "", capabilities: { tuning: {} },
     setup(s) { su = s; dm.setup(s); },
     subscribeForUpdates: async (s, enable) => {

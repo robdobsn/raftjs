@@ -63,13 +63,48 @@ export default function Main() {
 
   const [serialNo, setSerialNo] = useState<string>('');
 
-  const handleConnect = () => {
-    if (ipAddress.trim() === '') {
-      console.warn('No IP address entered');
+  // Connection attempt feedback. `connecting` disables the connect buttons while
+  // an attempt is in flight, `connError` reports why the last attempt failed and
+  // `connIssue` tracks a lost link that the connector is trying to restore.
+  const [connecting, setConnecting] = useState(false);
+  const [connError, setConnError] = useState<string | null>(null);
+  const [connIssue, setConnIssue] = useState<'none' | 'retrying' | 'degraded'>('none');
+
+  // Start a connection and surface the outcome - a failed connect must never
+  // look as though the button was not pressed.
+  const startConnect = async (
+    method: string,
+    locator: string | object,
+    uuids: string[],
+    bleSerialNo: string | null,
+    targetDesc: string
+  ) => {
+    if (connecting) {
       return;
     }
-    connManager.connect('WebSocket', ipAddress, [], null);
-    localStorage.setItem('lastIpAddress', ipAddress);
+    setConnecting(true);
+    setConnError(null);
+    let connOk = false;
+    try {
+      connOk = await connManager.connect(method, locator, uuids, bleSerialNo);
+    } catch (error) {
+      console.warn(`Connect to ${targetDesc} failed: ${error}`);
+    } finally {
+      setConnecting(false);
+      if (!connOk) {
+        setConnError(`Failed to connect to ${targetDesc}`);
+      }
+    }
+  };
+
+  const handleConnect = () => {
+    const host = ipAddress.trim();
+    if (host === '') {
+      setConnError('Enter an IP address or hostname');
+      return;
+    }
+    localStorage.setItem('lastIpAddress', host);
+    void startConnect('WebSocket', host, [], null, host);
   };
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
@@ -92,6 +127,15 @@ export default function Main() {
         ) {
           setConnectionStatus(eventEnum);
           setConnectionTime(new Date());
+          setConnIssue('none');
+        } else if (eventEnum === RaftConnEvent.CONN_ISSUE_DETECTED) {
+          // Link lost - the connector is retrying, stay on the connected view
+          setConnIssue('retrying');
+        } else if (eventEnum === RaftConnEvent.CONN_ISSUE_RESOLVED) {
+          setConnIssue('none');
+        } else if (eventEnum === RaftConnEvent.CONN_RECOVERY_DEGRADED) {
+          // Transport is back but subscriptions were not restored
+          setConnIssue('degraded');
         }
       } else if (eventType === 'pub') {
         // Forward camera publish frames to the camera feed store
@@ -278,6 +322,12 @@ export default function Main() {
                       <div>
                         {elapsedTime && <p>{elapsedTime}</p>}
                       </div>
+                      {connIssue === 'retrying' && (
+                        <div className="conn-status conn-status-warn">Connection lost - retrying…</div>
+                      )}
+                      {connIssue === 'degraded' && (
+                        <div className="conn-status conn-status-warn">Reconnected - updates not restored</div>
+                      )}
                     </div>
                   </div>
                   <StatusPanel />
@@ -321,6 +371,7 @@ export default function Main() {
                     <button
                       className="action-button"
                       onClick={handleConnect}
+                      disabled={connecting}
                     >
                       Connect
                     </button>
@@ -338,8 +389,9 @@ export default function Main() {
                     <button
                       className="action-button"
                       onClick={() => {
-                        connManager.connect('WebBLE', '', sysTypeManager.getAllServiceUUIDs(), serialNo);
+                        void startConnect('WebBLE', '', sysTypeManager.getAllServiceUUIDs(), serialNo, 'BLE device');
                       }}
+                      disabled={connecting}
                     >
                       Connect
                     </button>
@@ -349,13 +401,20 @@ export default function Main() {
                     <button
                       className="action-button"
                       onClick={() => {
-                        connManager.connect('WebSerial', '', [], null);
+                        void startConnect('WebSerial', '', [], null, 'serial device');
                       }}
+                      disabled={connecting}
                     >
                       Connect
                     </button>
                   </div>
                 </div>
+                {connecting && (
+                  <div className="conn-status" role="status">Connecting…</div>
+                )}
+                {!connecting && connError && (
+                  <div className="conn-status conn-status-error" role="alert">{connError}</div>
+                )}
               </>
             )}
           </div>

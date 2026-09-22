@@ -8,6 +8,14 @@ export type RaftStateIsInvalidCBType = () => void;
 export type RaftRxOtherMsgType = (payload: Uint8Array, _frameTimeMs: number) => void;
 
 export interface ConnectorOptions {
+  /**
+   * WebSocket path used when the locator is a bare host (default "ws").
+   * Note that RaftConnector resolves the system type (and so these options) only
+   * after the channel is connected, so a bare host locator always connects to
+   * ws://<host>/ws and reconnects reuse that same URL. To use a different endpoint
+   * pass a complete ws:// or wss:// URL as the locator. The endpoint must speak
+   * RICSerial (binary) - raftjs cannot use a RICJSON text WebSocket.
+   */
   wsSuffix?: string;
   connTimeoutMs?: number;
   bleConnItvlMs?: number;

@@ -102,12 +102,32 @@ export default class RaftChannelWebSocket implements RaftChannel {
     // Not connected
     this._isConnected = false;
     this._connectedLocator = "";
-    
-    // Disconnect websocket
-    this._webSocket?.close(1000);
+
+    // Release ownership of the socket and detach its handlers before closing it.
+    // The close event is delivered asynchronously - after this method returns -
+    // so left attached it could reach the connector during a following connect
+    // and report that new connection as disconnected.
+    const socket = this._webSocket;
+    this._webSocket = null;
+    if (!socket) {
+      return;
+    }
+    socket.onmessage = () => { /* detached */ };
+    socket.onclose = () => { /* detached */ };
+    try {
+      socket.close(1000);
+    } catch (e) {
+      RaftLog.warn(`RaftChannelWebSocket.disconnect error closing websocket: ${e}`);
+    }
 
     // Debug
-    RaftLog.debug(`RaftChannelWebSocket.disconnect attempting to close websocket`);
+    RaftLog.debug(`RaftChannelWebSocket.disconnect closed websocket`);
+
+    // Report the disconnection now (as the other channels do) rather than when
+    // the close event arrives
+    if (this._onConnEvent) {
+      this._onConnEvent(RaftConnEvent.CONN_DISCONNECTED);
+    }
   }
 
   pauseConnection(pause: boolean): void { RaftLog.verbose(`pauseConnection ${pause} - no effect for this channel type`); return; }

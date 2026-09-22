@@ -277,3 +277,82 @@ describe("RaftConnector terminal disconnect", () => {
     expect(secondChannel.disconnect).toHaveBeenCalledTimes(2);
   });
 });
+
+describe("RaftConnector WebSocket endpoint selection", () => {
+  const RESOLVED_URL = "ws://192.168.1.10/ws";
+
+  // A channel complete enough for connect() to run to completion
+  function makeWebSocketChannel(connectResult: boolean): RaftChannel {
+    return {
+      connect: jest.fn(async () => connectResult),
+      disconnect: jest.fn(async () => undefined),
+      isConnected: jest.fn(() => connectResult),
+      getConnectedLocator: jest.fn(() => (connectResult ? RESOLVED_URL : "")),
+      requiresSubscription: jest.fn(() => true),
+      fhBatchAckSize: jest.fn(() => 10),
+      fhFileBlockSize: jest.fn(() => 500),
+    } as unknown as RaftChannel;
+  }
+
+  function installChannel(connector: RaftConnector, channel: RaftChannel): void {
+    const connectorState = connector as unknown as {
+      _raftChannel: RaftChannel;
+      _channelConnMethod: string;
+    };
+    connectorState._raftChannel = channel;
+    connectorState._channelConnMethod = "WebSocket";
+  }
+
+  // Avoid real message exchange during the post-connect stages
+  function stubSystemUtils(connector: RaftConnector): void {
+    const systemUtils = connector.getRaftSystemUtils();
+    jest.spyOn(systemUtils, "getSystemInfo").mockResolvedValue(
+      { SystemVersion: "1.0.0" } as unknown as Awaited<ReturnType<typeof systemUtils.getSystemInfo>>
+    );
+    jest.spyOn(systemUtils, "refreshCapabilities").mockResolvedValue(undefined as never);
+    jest.spyOn(systemUtils, "isCapabilitySupported").mockReturnValue(false);
+  }
+
+  it("does not apply a previous session's system type options to a new connect", async () => {
+    const channel = makeWebSocketChannel(false);
+    const connector = new RaftConnector();
+    installChannel(connector, channel);
+    (connector as unknown as { _systemType: object })._systemType = {
+      connectorOptions: { wsSuffix: "stale" },
+    };
+
+    expect(await connector.connect("192.168.1.10")).toBe(false);
+    expect(channel.connect).toHaveBeenCalledWith("192.168.1.10", {});
+  });
+
+  it("retries a lost WebSocket connection on the URL that originally connected", async () => {
+    jest.useFakeTimers();
+    try {
+      const channel = makeWebSocketChannel(true);
+      const systemType = {
+        nameForDialogs: "Test",
+        connectorOptions: { wsSuffix: "other" },
+        setup: jest.fn(),
+        subscribeForUpdates: jest.fn(async () => undefined),
+        stateIsInvalid: null,
+        rxOtherMsgType: null,
+      };
+      const connector = new RaftConnector(async () => systemType);
+      installChannel(connector, channel);
+      stubSystemUtils(connector);
+
+      expect(await connector.connect("192.168.1.10")).toBe(true);
+      expect(channel.connect).toHaveBeenLastCalledWith("192.168.1.10", {});
+
+      // Link lost - the retry must reuse the resolved URL, which the channel
+      // treats as authoritative whatever the system type's wsSuffix says
+      connector.onConnEvent(RaftConnEvent.CONN_DISCONNECTED);
+      await jest.advanceTimersByTimeAsync(10000);
+
+      expect(channel.connect).toHaveBeenCalledTimes(2);
+      expect(channel.connect).toHaveBeenLastCalledWith(RESOLVED_URL, systemType.connectorOptions);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+});
