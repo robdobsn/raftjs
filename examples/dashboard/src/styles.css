@@ -407,6 +407,57 @@ h1 {
     color: #fff;
 }
 
+.device-zonegrid {
+    padding: 10px;
+    border: 1px solid #666;
+    border-radius: 4px;
+    background-color: #282c34;
+    color: #fff;
+}
+
+.zonegrid-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+    font-size: 0.85rem;
+}
+
+.zonegrid-header label {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+}
+
+.zonegrid-title {
+    font-weight: bold;
+}
+
+.zonegrid-range {
+    margin-left: auto;
+    opacity: 0.8;
+}
+
+.zonegrid-grid {
+    display: grid;
+    gap: 2px;
+    width: min(100%, 26rem);
+    aspect-ratio: 1;
+}
+
+.zonegrid-cell {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 2px;
+    font-size: 0.7rem;
+    font-variant-numeric: tabular-nums;
+    color: #fff;
+    text-shadow: 0 0 2px #000;
+    overflow: hidden;
+}
+
 .menu-icon,
 .header-menu-icon {
     cursor: pointer;
