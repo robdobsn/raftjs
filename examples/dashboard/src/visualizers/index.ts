@@ -10,6 +10,7 @@ import { VisualizerRegistry } from './VisualizerRegistry';
 import SpectrumChart from './SpectrumChart';
 import LedGridVisualizer from './LedGridVisualizer';
 import VcpCalVisualizer from './VcpCalVisualizer';
+import ZoneGridVisualizer from './ZoneGridVisualizer';
 import { getAttrElemsPerSample } from '../../../../src/RaftDeviceInfo';
 
 VisualizerRegistry.register({
@@ -24,6 +25,21 @@ VisualizerRegistry.register({
         return 0;
     },
     component: SpectrumChart,
+});
+
+VisualizerRegistry.register({
+    id: 'zonegrid',
+    placement: 'charts',
+    match: (item) => {
+        if (item.kind !== 'attribute') return 0;
+        const attr = item.attribute;
+        if (attr.vt === 'zonegrid' || attr.vt === 'heatmap') return 100;
+        // Heuristic: array attribute declaring a square "resolution" such as "8x8" (e.g. AMG8833)
+        const res = (attr as any).resolution;
+        if (typeof res === 'string' && /^\d+x\d+$/.test(res) && attr.t && getAttrElemsPerSample(attr.t) > 1) return 20;
+        return 0;
+    },
+    component: ZoneGridVisualizer,
 });
 
 VisualizerRegistry.register({
