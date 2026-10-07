@@ -7,7 +7,7 @@
 //
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-import { CustomFunctionDefinition, DeviceTypePollRespMetadata } from "./RaftDeviceInfo";
+import { CustomFunctionDefinition, DeviceTypePollRespMetadata, getAttrElemsPerSample } from "./RaftDeviceInfo";
 import { transpilePseudocodeToJs } from "./PseudocodeTranspiler";
 
 type CustomAttrJsFn = (
@@ -17,12 +17,14 @@ type CustomAttrJsFn = (
     pollRespMetadata: DeviceTypePollRespMetadata,
     msgBuffer: Uint8Array,
     msgBufIdx: number,
-    numMsgBytes: number
+    numMsgBytes: number,
+    arrayElems: Record<string, number>
 ) => void;
 
 export default class CustomAttrHandler {
 
     private _jsFunctionCache = new Map<string, CustomAttrJsFn>();
+    private _transpileFailures = new Set<string>();
 
     public handleAttr(pollRespMetadata: DeviceTypePollRespMetadata, msgBuffer: Uint8Array, msgBufIdx: number,
                       msgEndIdx: number = msgBuffer.length): number[][] {
@@ -64,8 +66,17 @@ export default class CustomAttrHandler {
             return attrValueVecs;
         }
 
+        // Elements per sample of each array attribute (written as out.<name>[i] = v)
+        const arrayElems: Record<string, number> = {};
+        for (const attrDef of pollRespMetadata.a) {
+            const elems = attrDef.t ? getAttrElemsPerSample(attrDef.t) : 1;
+            if (elems > 1) {
+                arrayElems[attrDef.n] = elems;
+            }
+        }
+
         try {
-            fn(buf, attrValues, attrValueVecs, pollRespMetadata, msgBuffer, msgBufIdx, numMsgBytes);
+            fn(buf, attrValues, attrValueVecs, pollRespMetadata, msgBuffer, msgBufIdx, numMsgBytes, arrayElems);
         } catch (err) {
             console.error(`CustomAttrHandler function ${customFnDef.n} execution failed`, err);
         }
@@ -76,7 +87,18 @@ export default class CustomAttrHandler {
         // Prefer explicit JS if provided, otherwise transpile from pseudocode
         let jsSource = customFnDef.j?.trim();
         if (!jsSource && customFnDef.c) {
-            jsSource = transpilePseudocodeToJs(customFnDef.c);
+            // Don't retry (and re-log) pseudocode that has already failed to transpile
+            const failKey = `${customFnDef.n}::${customFnDef.c}`;
+            if (this._transpileFailures.has(failKey)) {
+                return null;
+            }
+            try {
+                jsSource = transpilePseudocodeToJs(customFnDef.c);
+            } catch (err) {
+                this._transpileFailures.add(failKey);
+                console.error(`CustomAttrHandler failed to transpile function ${customFnDef.n}`, err);
+                return null;
+            }
         }
         if (!jsSource) {
             return null;
@@ -97,6 +119,7 @@ export default class CustomAttrHandler {
                 "msgBuffer",
                 "msgBufIdx",
                 "numMsgBytes",
+                "__arrayElems",
                 jsSource
             ) as CustomAttrJsFn;
             this._jsFunctionCache.set(cacheKey, fn);

@@ -81,7 +81,8 @@ export default class AttributeHandler {
                 // Sign-extend values for signed types — the pseudocode produces unsigned
                 // values from bitwise operations, but the attribute type declares signedness
                 if (attrDef.t && isAttrTypeSigned(attrDef.t)) {
-                    const byteWidth = structSizeOf(attrDef.t);
+                    // Width of one element (array attributes like "<h[64]" are sign-extended per element)
+                    const byteWidth = structSizeOf(attrDef.t) / getAttrElemsPerSample(attrDef.t);
                     const signBit = 1 << (byteWidth * 8 - 1);
                     const range = signBit * 2;
                     newAttrValues[attrIdx] = newAttrValues[attrIdx].map(v => {
