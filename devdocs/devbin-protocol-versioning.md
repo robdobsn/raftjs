@@ -46,6 +46,35 @@ Detection per-record: `resolveRecordPayloadFormat` validates that
 `sampleLen` prefixes line up with the record length. The probe is cheap
 because all the typeinfo needed is already in hand.
 
+#### `DevbinV1Framed` long-sample escape (compatible extension)
+
+A sample longer than 255 bytes is written with an escape instead of the
+1-byte length:
+
+```
+sample := [len:1][data]                    len 1..255   (unchanged)
+        | [0x00][lenHi][lenLo][data]       len 256..65535
+```
+
+- **Short samples are unchanged.** Firmware uses the escape only for
+  samples over 255 bytes, so every existing device stays byte-identical
+  on the wire.
+- **Not a new variant.** A 0 length was never valid (every sample holds
+  at least the 2-byte timestamp), so this extends `DevbinV1Framed` rather
+  than defining a new one. Parsers handle both forms in one place
+  (`readFramedSampleLen`), and the format probe uses the same function.
+- **Older parsers drop that device cleanly.** A parser without the escape
+  stops reading the record at the 0 length, so it drops that device's
+  remaining samples in the record without misreading them. Other records
+  in the frame are unaffected because records are framed by `recordLen`.
+  This is covered by a test run against the pre-escape parser.
+- **Record size.** A record body is limited to 65,535 bytes by its 16-bit
+  `recordLen`. Firmware starts another record for the same device, with
+  the next `deviceSeq`, when a run of samples would overflow one, and
+  raftjs appends samples from repeated records in order.
+  Firmware: `RaftDevice::appendLengthPrefixedSample` /
+  `lengthPrefixedSampleSize` (RaftCore), used by every devbin producer.
+
 ### Why keep them separate
 
 The two axes have already drifted independently once: there exists

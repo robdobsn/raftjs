@@ -107,7 +107,18 @@ export class DeviceManager implements RaftDeviceMgrIF{
     private _pendingDeviceTypeRequests: { [deviceType: string]: {
         promise: Promise<DeviceTypeInfo | undefined>;
         waitingQueue: Array<{resolve: (value: DeviceTypeInfo | undefined) => void, reject: (reason?: any) => void}>;
+        startMs: number;
     } } = {};
+
+    // Client messages (devbin / devjson) are processed strictly one at a time in arrival
+    // order. Each record may await a device type info lookup, and without this a later
+    // message could be processed while an earlier one waits - storing samples out of order.
+    private _clientMsgQueue: Promise<void> = Promise.resolve();
+
+    // Longest a message waits for a device type info lookup before skipping that record
+    // (the lookup carries on and later messages use the result). Bounds how long a lost
+    // request (retried for many seconds) can hold up the message queue.
+    private static readonly DEVICE_TYPE_INFO_MSG_WAIT_MS = 1500;
 
     // Rate-limit map for malformed-sample warnings (used by both devbin
     // payload formats).
@@ -223,7 +234,11 @@ export class DeviceManager implements RaftDeviceMgrIF{
     // Handle device message binary
     ////////////////////////////////////////////////////////////////////////////
 
-    public async handleClientMsgBinary(rxMsg: Uint8Array) {
+    public handleClientMsgBinary(rxMsg: Uint8Array): Promise<void> {
+        return this.enqueueClientMsg(() => this.processClientMsgBinary(rxMsg));
+    }
+
+    private async processClientMsgBinary(rxMsg: Uint8Array): Promise<void> {
         // console.log(`DeviceManager client1 msg ${RaftUtils.bufferToHex(rxMsg)}`);
 
         // DevBIN message format
@@ -243,6 +258,9 @@ export class DeviceManager implements RaftDeviceMgrIF{
         //   Bytes 7-8:  devTypeIdx    uint16 big-endian — device type table index
         //   Byte  9:    deviceSeqNum  uint8, wrapping — per-device drop detection
         //   Bytes 10+:  samples       length-prefixed: [sampleLen(1B)][sampleData(sampleLen B)] × N
+        //               Long-sample escape (samples over 255 bytes): [0x00][lenHi][lenLo][sampleData]
+        //               - a compatible extension: a 0 length was never valid, so older parsers
+        //               stop at it and drop the rest of that record rather than misreading it
         //
         // Backwards compatibility:
         //   Cog v1.9.5 is already in production and sends the older RaftCore devbin layout:
@@ -389,7 +407,7 @@ export class DeviceManager implements RaftDeviceMgrIF{
             // find the schema before settling on the device key.
             let recordPayloadFormat = payloadFormat;
             let recordHeaderLen = recordPayloadFormat === "DevbinV1Framed" ? devbinV1FramedHeaderLen : devbinV0FixedHeaderLen;
-            const resolvedDeviceTypeInfo = await this.getDeviceTypeInfo(busNum.toString(), devTypeIdx.toString());
+            const resolvedDeviceTypeInfo = await this.getDeviceTypeInfoForMsg(busNum.toString(), devTypeIdx.toString());
             if (resolvedDeviceTypeInfo?.resp) {
                 recordPayloadFormat = this.resolveRecordPayloadFormat(rxMsg, commonRecordHeaderEndPos,
                     samplesEndPos, resolvedDeviceTypeInfo.resp, recordPayloadFormat, deviceSeqNumLen);
@@ -443,11 +461,11 @@ export class DeviceManager implements RaftDeviceMgrIF{
                 // failBusMissing) so we skip it entirely for DevbinV0Fixed
                 // records to avoid noisy requests.
                 const deviceTypeInfo = recordPayloadFormat === "DevbinV1Framed"
-                    ? (await this.getDeviceTypeInfo(deviceKey)
+                    ? (await this.getDeviceTypeInfoForMsg(deviceKey)
                         ?? resolvedDeviceTypeInfo
-                        ?? await this.getDeviceTypeInfo(busNum.toString(), devTypeIdx.toString()))
+                        ?? await this.getDeviceTypeInfoForMsg(busNum.toString(), devTypeIdx.toString()))
                     : (resolvedDeviceTypeInfo
-                        ?? await this.getDeviceTypeInfo(busNum.toString(), devTypeIdx.toString()));
+                        ?? await this.getDeviceTypeInfoForMsg(busNum.toString(), devTypeIdx.toString()));
                 
                 // Debug
                 // console.log(`DevMan.handleClientMsgBinary debugIdx ${debugMsgIndex} pollDataPos ${pollDataPos} busNum ${busNum} devAddr 0x${devAddr.toString(16)} devTypeIdx ${devTypeIdx} deviceTypeInfo ${JSON.stringify(deviceTypeInfo)}`);
@@ -516,10 +534,14 @@ export class DeviceManager implements RaftDeviceMgrIF{
                             console.warn(`DevMan.handleClientMsgBinary debugIdx ${debugMsgIndex} pollDataPos ${pollDataPos} exceeds message length ${rxMsg.length}`);
                             break;
                         }
-                        const sampleLen = rxMsg[pollDataPos];
-                        pollDataPos += 1;
+                        const prefix = this.readFramedSampleLen(rxMsg, pollDataPos, samplesEndPos);
+                        if (!prefix) {
+                            break;
+                        }
+                        const sampleLen = prefix.sampleLen;
+                        pollDataPos += prefix.prefixLen;
 
-                        if (sampleLen === 0 || pollDataPos + sampleLen > samplesEndPos) {
+                        if (pollDataPos + sampleLen > samplesEndPos) {
                             break;
                         }
 
@@ -639,7 +661,11 @@ export class DeviceManager implements RaftDeviceMgrIF{
     // Handle device message JSON
     ////////////////////////////////////////////////////////////////////////////
 
-    public async handleClientMsgJson(jsonMsg: string) {
+    public handleClientMsgJson(jsonMsg: string): Promise<void> {
+        return this.enqueueClientMsg(() => this.processClientMsgJson(jsonMsg));
+    }
+
+    private async processClientMsgJson(jsonMsg: string): Promise<void> {
 
         const data = JSON.parse(jsonMsg) as DeviceMsgJson;
         // console.log(`DeviceManager client msg ${JSON.stringify(data)}`);
@@ -692,8 +718,8 @@ export class DeviceManager implements RaftDeviceMgrIF{
                     // Try the per-device endpoint first (current firmware) and
                     // fall back to the bus/type endpoint used by legacy
                     // firmware and the simulator.
-                    const deviceTypeInfo = await this.getDeviceTypeInfo(deviceKey)
-                        ?? await this.getDeviceTypeInfo(busName, deviceTypeName);
+                    const deviceTypeInfo = await this.getDeviceTypeInfoForMsg(deviceKey)
+                        ?? await this.getDeviceTypeInfoForMsg(busName, deviceTypeName);
 
                     // Check if device record exists
                     if (deviceKey in this._devicesState) {
@@ -870,9 +896,7 @@ export class DeviceManager implements RaftDeviceMgrIF{
         //   - two args:   ?bus=<busName>&type=<deviceType>  (Cog v1.9.5 firmware)
         // The two requests are tracked under independent cache keys so a
         // failed lookup on one form doesn't poison the other.
-        const cacheKey = deviceType === undefined
-            ? deviceKeyOrBusName
-            : `bustype:${deviceKeyOrBusName}:${deviceType}`;
+        const cacheKey = this.deviceTypeInfoCacheKey(deviceKeyOrBusName, deviceType);
         const requestLabel = deviceType === undefined
             ? `deviceKey ${deviceKeyOrBusName}`
             : `bus ${deviceKeyOrBusName} type ${deviceType}`;
@@ -903,7 +927,8 @@ export class DeviceManager implements RaftDeviceMgrIF{
         const requestPromise = this.executeDeviceTypeInfoRequest(deviceKeyOrBusName, deviceType, cacheKey);
         this._pendingDeviceTypeRequests[cacheKey] = {
             promise: requestPromise,
-            waitingQueue: []
+            waitingQueue: [],
+            startMs: Date.now()
         };
 
         try {
@@ -925,6 +950,53 @@ export class DeviceManager implements RaftDeviceMgrIF{
             // Clean up the pending request
             delete this._pendingDeviceTypeRequests[cacheKey];
         }
+    }
+
+    private deviceTypeInfoCacheKey(deviceKeyOrBusName: string, deviceType?: string): string {
+        return deviceType === undefined
+            ? deviceKeyOrBusName
+            : `bustype:${deviceKeyOrBusName}:${deviceType}`;
+    }
+
+    // Device type info lookup for use while processing a client message: as getDeviceTypeInfo,
+    // but waits no longer than DEVICE_TYPE_INFO_MSG_WAIT_MS from when the request started.
+    // A request already outstanding for longer returns undefined at once, so a slow or lost
+    // request delays the (serialised) message queue once rather than for every message.
+    private async getDeviceTypeInfoForMsg(deviceKeyOrBusName: string, deviceType?: string): Promise<DeviceTypeInfo | undefined> {
+        const cacheKey = this.deviceTypeInfoCacheKey(deviceKeyOrBusName, deviceType);
+        if (cacheKey in this._cachedDeviceTypeRecs) {
+            return this._cachedDeviceTypeRecs[cacheKey];
+        }
+        const pending = this._pendingDeviceTypeRequests[cacheKey];
+        const waitMs = DeviceManager.DEVICE_TYPE_INFO_MSG_WAIT_MS - (pending ? Date.now() - pending.startMs : 0);
+        if (waitMs <= 0) {
+            return undefined;
+        }
+        // A waiter can be rejected after the race has settled - swallow it here
+        const lookup = (deviceType === undefined
+            ? this.getDeviceTypeInfo(deviceKeyOrBusName)
+            : this.getDeviceTypeInfo(deviceKeyOrBusName, deviceType)).catch(() => undefined);
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const timeout = new Promise<undefined>((resolve) => {
+            timer = setTimeout(() => resolve(undefined), waitMs);
+        });
+        try {
+            return await Promise.race([lookup, timeout]);
+        } finally {
+            if (timer !== undefined) {
+                clearTimeout(timer);
+            }
+        }
+    }
+
+    // Run a client message handler after all earlier ones have finished
+    private enqueueClientMsg(handler: () => Promise<void>): Promise<void> {
+        const run = this._clientMsgQueue.then(handler);
+        // Keep the queue going if a handler fails (the caller still sees the failure)
+        this._clientMsgQueue = run.catch((err) => {
+            console.warn(`DevMan client message handling failed ${err}`);
+        });
+        return run;
     }
 
     private async executeDeviceTypeInfoRequest(deviceKeyOrBusName: string, deviceType: string | undefined, cacheKey: string): Promise<DeviceTypeInfo | undefined> {
@@ -1000,6 +1072,27 @@ export class DeviceManager implements RaftDeviceMgrIF{
         return preferredFormat;
     }
 
+    // Read a DevbinV1Framed sample length prefix at pos: a 1-byte length (1..255), or the
+    // long-sample escape 0x00 followed by a uint16 big-endian length. Returns null if the
+    // prefix is invalid or does not fit before endPos.
+    private readFramedSampleLen(rxMsg: Uint8Array, pos: number, endPos: number): { sampleLen: number, prefixLen: number } | null {
+        if (pos >= endPos || pos >= rxMsg.length) {
+            return null;
+        }
+        const firstByte = rxMsg[pos];
+        if (firstByte !== 0) {
+            return { sampleLen: firstByte, prefixLen: 1 };
+        }
+        if (pos + 3 > endPos || pos + 3 > rxMsg.length) {
+            return null;
+        }
+        const sampleLen = (rxMsg[pos + 1] << 8) | rxMsg[pos + 2];
+        if (sampleLen === 0) {
+            return null;
+        }
+        return { sampleLen, prefixLen: 3 };
+    }
+
     private areDevbinV1FramedSamplesValid(rxMsg: Uint8Array, pollDataPos: number, samplesEndPos: number,
                 pollRespMetadata: DeviceTypePollRespMetadata): boolean {
         if ((pollDataPos < 0) || (pollDataPos > samplesEndPos) || (samplesEndPos > rxMsg.length)) {
@@ -1011,9 +1104,13 @@ export class DeviceManager implements RaftDeviceMgrIF{
         const fixedSampleLen = this.getDevbinV1FramedSampleLen(pollRespMetadata);
         let sampleCount = 0;
         while (pollDataPos < samplesEndPos) {
-            const sampleLen = rxMsg[pollDataPos];
-            pollDataPos += 1;
-            if ((sampleLen === 0) || (pollDataPos + sampleLen > samplesEndPos)) {
+            const prefix = this.readFramedSampleLen(rxMsg, pollDataPos, samplesEndPos);
+            if (!prefix) {
+                return false;
+            }
+            const sampleLen = prefix.sampleLen;
+            pollDataPos += prefix.prefixLen;
+            if (pollDataPos + sampleLen > samplesEndPos) {
                 return false;
             }
             if ((fixedSampleLen > 0) && (sampleLen !== fixedSampleLen)) {

@@ -33,6 +33,100 @@ async function makeDeviceManager(typeInfos: Record<string, DeviceTypeInfo>): Pro
     return deviceManager;
 }
 
+
+// ===== Long-sample escape: [0x00][lenHi][lenLo][data] for samples over 255 bytes =====
+
+// Big-endian helpers for building frames
+const u16 = (v: number) => [(v >> 8) & 0xff, v & 0xff];
+
+// One device record (current envelope payload format) with pre-built samples
+function devbinRecord(statusBus: number, addr: number, typeIdx: number, seq: number, samples: number[][]): number[] {
+    const body = [statusBus, (addr >>> 24) & 0xff, (addr >> 16) & 0xff, (addr >> 8) & 0xff, addr & 0xff, ...u16(typeIdx), seq];
+    for (const sample of samples) {
+        if (sample.length <= 255) {
+            body.push(sample.length, ...sample);
+        } else {
+            body.push(0x00, ...u16(sample.length), ...sample);
+        }
+    }
+    return [...u16(body.length), ...body];
+}
+
+function devbinFrame(records: number[][]): Uint8Array {
+    return Uint8Array.from([0x00, 0x80, 0xDB, 0xFF, 0x00, ...records.flat()]);
+}
+
+// 320-byte attribute payload: 2-byte counter then 318 bytes; sample = 2-byte timestamp + payload
+const bigInfo = makeTypeInfo("BigSample", 320, [
+    { n: "count", t: ">H" },
+    { n: "data", t: "B[318]" }
+]);
+function bigSample(tsTicks: number, count: number): number[] {
+    const data = Array.from({ length: 318 }, (_, i) => (i + count) & 0xff);
+    return [...u16(tsTicks), ...u16(count), ...data];
+}
+
+describe("DeviceManager devbin long-sample escape", () => {
+    const smallInfo = makeTypeInfo("Small", 2, [{ n: "v", t: ">H" }]);
+
+    it("decodes a sample over 255 bytes and keeps framing for the next record", async () => {
+        const deviceManager = await makeDeviceManager({ "9": bigInfo, "4": smallInfo });
+        const rxMsg = devbinFrame([
+            devbinRecord(0x81, 0x0129, 9, 1, [bigSample(10, 7)]),
+            devbinRecord(0x81, 0x0015, 4, 1, [[0x00, 0x05, 0x12, 0x34]]),
+        ]);
+        await deviceManager.handleClientMsgBinary(rxMsg);
+
+        const big = deviceManager.getDeviceState("1_129");
+        expect(big.deviceTimeline.totalSamplesAdded).toBe(1);
+        expect(big.deviceAttributes.count.values).toEqual([7]);
+        expect(big.deviceAttributes.data.values.length).toBe(318);
+        expect(big.deviceAttributes.data.values.slice(0, 3)).toEqual([7, 8, 9]);
+        expect(big.deviceAttributes.data.values[317]).toBe((317 + 7) & 0xff);
+
+        const small = deviceManager.getDeviceState("1_15");
+        expect(small.deviceAttributes.v.values).toEqual([0x1234]);
+    });
+
+    it("decodes several long samples in one record", async () => {
+        const deviceManager = await makeDeviceManager({ "9": bigInfo });
+        await deviceManager.handleClientMsgBinary(devbinFrame([
+            devbinRecord(0x81, 0x0129, 9, 1, [bigSample(10, 1), bigSample(20, 2), bigSample(30, 3)]),
+        ]));
+        const big = deviceManager.getDeviceState("1_129");
+        expect(big.deviceAttributes.count.values).toEqual([1, 2, 3]);
+        expect(big.deviceAttributes.data.values.length).toBe(3 * 318);
+    });
+
+    it("appends samples from repeated records for the same device in order", async () => {
+        // Firmware splits a long run of samples across records when one would exceed 64 KB
+        const deviceManager = await makeDeviceManager({ "9": bigInfo });
+        await deviceManager.handleClientMsgBinary(devbinFrame([
+            devbinRecord(0x81, 0x0129, 9, 1, [bigSample(10, 1)]),
+            devbinRecord(0x81, 0x0129, 9, 2, [bigSample(20, 2)]),
+        ]));
+        const big = deviceManager.getDeviceState("1_129");
+        expect(big.deviceAttributes.count.values).toEqual([1, 2]);
+    });
+
+    it("drops a truncated escape without throwing", async () => {
+        const deviceManager = await makeDeviceManager({ "9": bigInfo });
+        // Escape claims 322 bytes but the record holds only a few
+        const body = [0x81, 0x00, 0x00, 0x01, 0x29, ...u16(9), 1, 0x00, ...u16(322), 0x01, 0x02];
+        const rxMsg = Uint8Array.from([0x00, 0x80, 0xDB, 0xFF, 0x00, ...u16(body.length), ...body]);
+        await expect(deviceManager.handleClientMsgBinary(rxMsg)).resolves.not.toThrow();
+        const big = deviceManager.getDeviceState("1_129");
+        expect(big?.deviceTimeline?.totalSamplesAdded ?? 0).toBe(0);
+    });
+
+    it("decodes an escaped sample in a frame without an envelope (format probe)", async () => {
+        const deviceManager = await makeDeviceManager({ "9": bigInfo });
+        const rxMsg = Uint8Array.from([0x00, 0x80, ...devbinRecord(0x81, 0x0129, 9, 1, [bigSample(10, 5)])]);
+        await deviceManager.handleClientMsgBinary(rxMsg);
+        expect(deviceManager.getDeviceState("1_129").deviceAttributes.count.values).toEqual([5]);
+    });
+});
+
 describe("DeviceManager binary devbin parsing", () => {
     const accelInfo = makeTypeInfo("MXC400xXC", 7, [
         { n: "x", t: ">h" },
@@ -266,4 +360,74 @@ describe("DeviceManager binary devbin parsing", () => {
         expect(devicesState["0_0_3"].deviceType).toBe("Power");
         expect(devicesState["0_0_3"].deviceAttributes.battery.values).toEqual([99]);
     });
+});
+
+// ===== Client messages are processed in arrival order =====
+
+describe("DeviceManager client message ordering", () => {
+    const fastInfo = makeTypeInfo("Fast", 2, [{ n: "v", t: ">H" }]);
+    const slowInfo = makeTypeInfo("Slow", 2, [{ n: "v", t: ">H" }]);
+
+    // Device manager whose type info for type index 9 answers after delayMs (never if < 0)
+    async function makeSlowTypeInfoManager(delayMs: number): Promise<DeviceManager> {
+        const msgHandler = {
+            sendRICRESTURL: jest.fn(async (cmd: string) => {
+                const deviceType = new URLSearchParams(cmd.split("?")[1]).get("type");
+                if (deviceType === "9") {
+                    if (delayMs < 0) return new Promise(() => {});
+                    await new Promise((r) => setTimeout(r, delayMs));
+                    return { rslt: "ok", devinfo: slowInfo };
+                }
+                return deviceType === "4" ? { rslt: "ok", devinfo: fastInfo } : { rslt: "fail" };
+            })
+        };
+        const systemUtils = {
+            getMsgHandler: () => msgHandler,
+            getPublishTopicName: () => "devbin"
+        } as unknown as RaftSystemUtils;
+        const deviceManager = new DeviceManager();
+        await deviceManager.setup(systemUtils);
+        return deviceManager;
+    }
+
+    const sampleV = (ts: number, v: number) => [...u16(ts), ...u16(v)];
+
+    it("keeps a device's samples in order while an earlier record waits for type info", async () => {
+        const deviceManager = await makeSlowTypeInfoManager(50);
+        // Frame 1: slow device first, then the fast device's sample 1; frame 2: fast sample 2
+        const frame1 = devbinFrame([
+            devbinRecord(0x81, 0x0129, 9, 1, [sampleV(10, 100)]),
+            devbinRecord(0x81, 0x0015, 4, 1, [sampleV(10, 1)]),
+        ]);
+        const frame2 = devbinFrame([devbinRecord(0x81, 0x0015, 4, 2, [sampleV(20, 2)])]);
+
+        // Delivered as a transport callback would - without awaiting between messages
+        const p1 = deviceManager.handleClientMsgBinary(frame1);
+        const p2 = deviceManager.handleClientMsgBinary(frame2);
+        await Promise.all([p1, p2]);
+
+        expect(deviceManager.getDeviceState("1_15").deviceAttributes.v.values).toEqual([1, 2]);
+        expect(deviceManager.getDeviceState("1_129").deviceAttributes.v.values).toEqual([100]);
+    });
+
+    it("does not hold up later messages for long when a type info request never answers", async () => {
+        const deviceManager = await makeSlowTypeInfoManager(-1);
+        const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+        const startMs = Date.now();
+        await deviceManager.handleClientMsgBinary(devbinFrame([
+            devbinRecord(0x81, 0x0129, 9, 1, [sampleV(10, 100)]),
+            devbinRecord(0x81, 0x0015, 4, 1, [sampleV(10, 1)]),
+        ]));
+        // Later message: the slow request is already over the wait limit, so no further wait
+        const secondStartMs = Date.now();
+        await deviceManager.handleClientMsgBinary(devbinFrame([
+            devbinRecord(0x81, 0x0129, 9, 2, [sampleV(20, 101)]),
+            devbinRecord(0x81, 0x0015, 4, 2, [sampleV(20, 2)]),
+        ]));
+        warn.mockRestore();
+
+        expect(secondStartMs - startMs).toBeLessThan(2500);
+        expect(Date.now() - secondStartMs).toBeLessThan(200);
+        expect(deviceManager.getDeviceState("1_15").deviceAttributes.v.values).toEqual([1, 2]);
+    }, 10000);
 });
