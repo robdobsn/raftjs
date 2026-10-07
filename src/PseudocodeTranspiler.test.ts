@@ -370,3 +370,88 @@ describe("CustomAttrHandler with transpiled pseudocode", () => {
         expect(result[0][0]).toBeCloseTo(expected, 10);
     });
 });
+
+// ===== Array attribute outputs (out.<name>[i] = value;) =====
+// Mirrors RaftCore scripts/tests/test_pseudocode_arrays.py so both decoders agree
+
+function makeArrayMeta(b: number, attrs: { n: string; t: string }[], name: string, code: string): DeviceTypePollRespMetadata {
+    return { b, a: attrs, c: { n: name, c: code } } as DeviceTypePollRespMetadata;
+}
+
+describe("array outputs in pseudocode", () => {
+    test("transpiles element writes to bounds-checked __setElem calls", () => {
+        const js = transpilePseudocodeToJs("int i=0;out.g[i+1]=buf[buf[0]];");
+        expect(js).toContain('__setElem("g",(i+1),(buf[buf[0]]))');
+        expect(js).not.toContain("out.g[");
+    });
+
+    test("next closes the sample", () => {
+        const js = transpilePseudocodeToJs("out.a=1;next;");
+        expect(js).toContain("__endSample()");
+    });
+
+    test("rejects compound assignment and reads of array elements", () => {
+        expect(() => transpilePseudocodeToJs("out.g[0]+=1;")).toThrow();
+        expect(() => transpilePseudocodeToJs("int x=out.g[0];")).toThrow();
+    });
+
+    test("single sample without next: scalar + array, out-of-range writes ignored", () => {
+        const meta = makeArrayMeta(9, [{ n: "seq", t: "B" }, { n: "vals", t: "<h[4]" }], "single",
+            "out.seq=buf[0];int i=0;while(i<4){out.vals[i]=(buf[2+i*2]<<8)|buf[1+i*2];i++;}out.vals[7]=99;out.vals[0-1]=98;");
+        const handler = new CustomAttrHandler();
+        const result = handler.handleAttr(meta, new Uint8Array([7, 0x01, 0x00, 0xFE, 0xFF, 0x2C, 0x01, 0x00, 0x80]), 0);
+        expect(result[0]).toEqual([7]);
+        // Raw (unsigned) values - sign extension is applied later by the attribute handler
+        expect(result[1]).toEqual([1, 0xFFFE, 300, 0x8000]);
+    });
+
+    test("multiple samples via next: unwritten elements are zero, not carried over", () => {
+        const meta = makeArrayMeta(9, [{ n: "a", t: "B" }, { n: "g", t: "B[3]" }], "multi",
+            "int n=buf[0];int k=1;int s=0;while(s<n){out.a=s;int j=0;while(j<buf[k]){out.g[j]=buf[k+1+j];j++;}k+=4;s++;next;}");
+        const handler = new CustomAttrHandler();
+        const result = handler.handleAttr(meta, new Uint8Array([2, 3, 11, 12, 13, 1, 21, 0, 0]), 0);
+        expect(result[0]).toEqual([0, 1]);
+        expect(result[1]).toEqual([11, 12, 13, 21, 0, 0]);
+    });
+
+    test("array attribute never written in a sample still contributes zeros", () => {
+        const meta = makeArrayMeta(1, [{ n: "a", t: "B" }, { n: "g", t: "B[2]" }], "nowrite", "out.a=buf[0];next;");
+        const result = new CustomAttrHandler().handleAttr(meta, new Uint8Array([5]), 0);
+        expect(result).toEqual([[5], [0, 0]]);
+    });
+
+    test("early return still closes the open sample", () => {
+        const meta = makeArrayMeta(1, [{ n: "g", t: "B[2]" }], "early", "out.g[1]=buf[0];return 0;");
+        const result = new CustomAttrHandler().handleAttr(meta, new Uint8Array([9]), 0);
+        expect(result).toEqual([[0, 9]]);
+    });
+
+    test("malformed pseudocode yields no values rather than throwing", () => {
+        const meta = makeArrayMeta(1, [{ n: "g", t: "B[2]" }], "bad", "out.g[0]+=1;");
+        const handler = new CustomAttrHandler();
+        const errSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+        expect(handler.handleAttr(meta, new Uint8Array([1]), 0)).toEqual([[]]);
+        handler.handleAttr(meta, new Uint8Array([1]), 0);
+        // Transpile failure is logged once, not on every message
+        expect(errSpy).toHaveBeenCalledTimes(1);
+        errSpy.mockRestore();
+    });
+
+    test("existing scalar decodes give the same results", () => {
+        const meta = makeMeta(51, ["Red", "IR"], "max30101_fifo", PSEUDOCODE.max30101_fifo);
+        const buf = new Uint8Array(51);
+        buf[0] = 2; buf[2] = 0;                 // 2 samples
+        buf.set([0x01, 0x02, 0x03, 0x04, 0x05, 0x06], 3);
+        buf.set([0x11, 0x12, 0x13, 0x14, 0x15, 0x16], 9);
+        const result = new CustomAttrHandler().handleAttr(meta, buf, 0);
+        expect(result).toEqual([[0x010203, 0x111213], [0x040506, 0x141516]]);
+    });
+});
+
+describe("return statements", () => {
+    test("return with a value keeps a space (previously transpiled to returnX)", () => {
+        expect(transpilePseudocodeToJs("return 0;")).toContain("return 0;");
+        const meta = makeMeta(1, ["val"], "ret", "out.val=buf[0];return 1;");
+        expect(new CustomAttrHandler().handleAttr(meta, new Uint8Array([4]), 0)).toEqual([[4]]);
+    });
+});

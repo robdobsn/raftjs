@@ -164,3 +164,19 @@ describe("deviceAttrGetLatestFormatted with array attribute", () => {
         expect(deviceAttrGetLatestFormatted(attrState)).toBe("[0, -10, 10, -40, 30, 0, -20, -30, -50]");
     });
 });
+
+describe("custom decode with signed array attribute", () => {
+    test("sign-extends each element using the element width", () => {
+        const meta: DeviceTypePollRespMetadata = {
+            b: 4,
+            a: [{ n: "f", t: "<h[2]", r: [-32768, 32767], f: "d", o: "int16" }],
+            c: { n: "signed_arr", c: "out.f[0]=(buf[1]<<8)|buf[0];out.f[1]=(buf[3]<<8)|buf[2];" }
+        } as DeviceTypePollRespMetadata;
+        const handler = new AttributeHandler();
+        const devAttrsState: DeviceAttributesState = {};
+        const msg = new Uint8Array([0x00, 0x10, 0xFF, 0xFF, 0x02, 0x00]);
+        handler.processMsgAttrGroup(msg, 0, newTimeline(), meta, devAttrsState, 100);
+        expect(devAttrsState["f"].values).toEqual([-1, 2]);
+        expect(devAttrsState["f"].elemsPerSample).toBe(2);
+    });
+});
