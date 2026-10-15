@@ -8,7 +8,7 @@
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 import { DeviceAttributeState, DeviceAttributesState, DevicesState, DeviceState, DeviceStats, DeviceOnlineState, formatDeviceAddrHex, getDeviceKey, parseDeviceKey } from "./RaftDeviceStates";
-import { DeviceMsgJson } from "./RaftDeviceMsg";
+import { DeviceMsgJson, DeviceMsgJsonElem } from "./RaftDeviceMsg";
 import { RaftOKFail } from './RaftTypes';
 import { DeviceTypeInfo, DeviceTypeAction, DeviceTypeInfoRecs, DeviceTypePollRespMetadata, RaftDevTypeInfoResponse, SampleRateResult, getActionMapHex } from "./RaftDeviceInfo";
 import AttributeHandler from "./RaftAttributeHandler";
@@ -745,166 +745,24 @@ export class DeviceManager implements RaftDeviceMgrIF{
         // console.log(`DeviceManager client msg ${JSON.stringify(data)}`);
 
         // Iterate over the buses
-        Object.entries(data).forEach(([busName, devices]) => {
+        for (const [busName, devices] of Object.entries(data)) {
 
             // Check the bus name doesn't start with _ which is reserved for non-device information such as topic name
             if (busName.startsWith("_")) {
-                return;
+                continue;
             }
 
             // Check for bus status info
             if (devices && typeof devices === "object" && "_s" in devices) {
                 // console.log(`DeviceManager bus status ${JSON.stringify(devices._s)}`);
-                return;
+                continue;
             }
 
             // Iterate over the devices
-            Object.entries(devices).forEach(async ([devAddr, attrGroups]) => {
-
-                // Check for non-device info (starts with _)
-                if (devAddr.startsWith("_")) {
-                    return;
-                }
-
-                // Device type key (_t, sent by older firmware) or device type index (_i) as a string
-                let deviceTypeKeyOrIndex = "";
-                let deviceTypeIndex = -1;
-                if (attrGroups && typeof attrGroups === 'object' && "_t" in attrGroups && typeof attrGroups._t === "string") {
-                    deviceTypeKeyOrIndex = attrGroups._t || "";
-                } else if (attrGroups && typeof attrGroups === 'object' && "_i" in attrGroups && typeof attrGroups._i === "number") {
-                    deviceTypeIndex = attrGroups._i ?? -1;
-                    deviceTypeKeyOrIndex = deviceTypeIndex.toString();
-                } else
-                {
-                    console.warn(`DeviceManager missing device type attrGroups ${JSON.stringify(attrGroups)}`);
-                    return;
-                }
-
-                // Device key
-                const deviceKey = getDeviceKey(busName, devAddr);
-
-                // Update the last update time
-                this._deviceLastUpdateTime[deviceKey] = Date.now();
-
-                // Check if the device's type data needs resolving (new device, or its type has changed)
-                const { needsResolve, typeChanged } = this.noteRecordDeviceType(deviceKey, deviceTypeKeyOrIndex);
-                if (needsResolve) {
-
-                    // Decode with the type data for this record's device type index (or type key from
-                    // legacy firmware and the simulator). The per-device endpoint (current firmware) gives
-                    // the per-instance name/role, and is the fallback for type data.
-                    const perDeviceInfo = await this.getDeviceTypeInfoForMsg(deviceKey);
-                    const indexTypeInfo = await this.getDeviceTypeInfoForMsg(busName, deviceTypeKeyOrIndex);
-                    const deviceTypeInfo = indexTypeInfo ? this.withInstanceData(indexTypeInfo, deviceKey) : perDeviceInfo;
-                    if (deviceTypeInfo !== undefined) {
-                        this._deviceTypeIdSeen[deviceKey] = deviceTypeKeyOrIndex;
-                    } else if (typeChanged && (deviceKey in this._devicesState)) {
-                        // Never decode with the previous type's data
-                        this._devicesState[deviceKey].deviceTypeInfo = undefined;
-                    }
-
-                    // Check if device record exists
-                    if (deviceKey in this._devicesState) {
-                        if (deviceTypeInfo !== undefined) {
-                            this._devicesState[deviceKey].deviceTypeInfo = deviceTypeInfo;
-                            this._devicesState[deviceKey].deviceType = deviceTypeKeyOrIndex;
-                            this._devicesState[deviceKey].deviceAddress = devAddr;
-                            this._devicesState[deviceKey].busName = busName;
-                        }
-                    } else {
-                        // Create device record - device type info may be undefined
-                        this._devicesState[deviceKey] = {
-                            deviceTypeInfo: deviceTypeInfo,
-                            deviceTimeline: {
-                                timestampsUs: [],
-                                lastReportTimestampUs: 0,
-                                reportTimestampOffsetUs: 0,
-                                totalSamplesAdded: 0,
-                                emaLastSampleTimeUs: 0,
-                                emaIntervalUs: 0,
-                                emaPrevPollTimeUs: 0,
-                                emaCalibrated: false,
-                                emaCalibrationPolls: 0
-                            },
-                            deviceAttributes: {},
-                            deviceIsNew: true,
-                            stateChanged: false,
-                            onlineState: DeviceOnlineState.Online,
-                            deviceAddress: devAddr,
-                            deviceType: deviceTypeKeyOrIndex,
-                            busName: busName
-                        };
-                    }
-                }
-
-                // Get device state
-                const deviceState = this._devicesState[deviceKey];
-
-                // Check for online/offline/pending-deletion state information
-                if (attrGroups && typeof attrGroups === "object" && "_o" in attrGroups) {
-                    const onlineStateVal = typeof attrGroups._o === 'number' ? attrGroups._o : parseInt(String(attrGroups._o), 10);
-                    if (onlineStateVal === 2) {
-                        // Pending deletion - remove device and skip further processing
-                        this.removeDevice(deviceKey);
-                        return;
-                    }
-                    deviceState.onlineState = onlineStateVal === 1 ? DeviceOnlineState.Online : DeviceOnlineState.Offline;
-                }
-
-                // Check if device type info is available
-                if (!deviceState.deviceTypeInfo) {
-                    return;
-                }
-
-                const markers = this.extractMarkers(attrGroups);
-
-                // Iterate attribute groups
-                Object.entries(attrGroups).forEach(([attrGroupName, msgHexStr]) => {
-
-                    // Check valid
-                    if (attrGroupName.startsWith("_") || (typeof msgHexStr != 'string')) {
-                        return;
-                    }
-
-                    // Check the device type info
-                    if (!deviceState.deviceTypeInfo!.resp) {
-                        return;
-                    }
-
-                    // Convert the hex string to an arraybuffer by converting each pair of hex chars to a byte
-                    const msgBytes = this.hexToBytes(msgHexStr);
-
-                    // Work through the message which may contain multiple data instances
-                    let msgBufIdx = 0;
-
-                    // Iterate over attributes in the group
-                    const pollRespMetadata = deviceState.deviceTypeInfo!.resp!;
-
-                    const attrLengthsBefore = this.snapshotAttrLengths(deviceState.deviceAttributes, pollRespMetadata);
-                    const timelineLenBefore = deviceState.deviceTimeline.timestampsUs.length;
-                    const totalSamplesBefore = deviceState.deviceTimeline.totalSamplesAdded;
-
-                    // Loop
-                    while (msgBufIdx < msgBytes.length) {
-
-                        const newMsgBufIdx = this._attributeHandler.processMsgAttrGroup(msgBytes, msgBufIdx,
-                            deviceState.deviceTimeline, pollRespMetadata,
-                            deviceState.deviceAttributes,
-                            this._maxDatapointsToStore);
-                        if (newMsgBufIdx < 0)
-                            break;
-                        msgBufIdx = newMsgBufIdx;
-                        deviceState.stateChanged = true;
-                    }
-
-                    this.emitDecodedData(deviceKey, busName, devAddr, deviceState, pollRespMetadata,
-                        attrLengthsBefore, timelineLenBefore, attrGroupName, markers);
-
-                    const newSamples = deviceState.deviceTimeline.totalSamplesAdded - totalSamplesBefore;
-                    this.updateDeviceStats(deviceKey, newSamples, Date.now());
-                });
-            });
-        });
+            for (const [devAddr, attrGroups] of Object.entries(devices)) {
+                await this.processClientMsgJsonDevice(busName, devAddr, attrGroups);
+            }
+        }
 
         // Check for devices that have not been updated for a while
         if (this._removeDevicesFlag) {
@@ -919,6 +777,154 @@ export class DeviceManager implements RaftDeviceMgrIF{
         
         // Process the callback
         this.processStateCallback();
+    }
+
+    // Process one device of a devjson message (devices are processed one at a time, in message order, as
+    // each may wait for a device type info lookup)
+    private async processClientMsgJsonDevice(busName: string, devAddr: string, attrGroups: DeviceMsgJsonElem): Promise<void> {
+
+        // Check for non-device info (starts with _)
+        if (devAddr.startsWith("_")) {
+            return;
+        }
+
+        // Device type key (_t, sent by older firmware) or device type index (_i) as a string
+        let deviceTypeKeyOrIndex = "";
+        let deviceTypeIndex = -1;
+        if (attrGroups && typeof attrGroups === 'object' && "_t" in attrGroups && typeof attrGroups._t === "string") {
+            deviceTypeKeyOrIndex = attrGroups._t || "";
+        } else if (attrGroups && typeof attrGroups === 'object' && "_i" in attrGroups && typeof attrGroups._i === "number") {
+            deviceTypeIndex = attrGroups._i ?? -1;
+            deviceTypeKeyOrIndex = deviceTypeIndex.toString();
+        } else
+        {
+            console.warn(`DeviceManager missing device type attrGroups ${JSON.stringify(attrGroups)}`);
+            return;
+        }
+
+        // Device key
+        const deviceKey = getDeviceKey(busName, devAddr);
+
+        // Update the last update time
+        this._deviceLastUpdateTime[deviceKey] = Date.now();
+
+        // Check if the device's type data needs resolving (new device, or its type has changed)
+        const { needsResolve, typeChanged } = this.noteRecordDeviceType(deviceKey, deviceTypeKeyOrIndex);
+        if (needsResolve) {
+
+            // Decode with the type data for this record's device type index (or type key from
+            // legacy firmware and the simulator). The per-device endpoint (current firmware) gives
+            // the per-instance name/role, and is the fallback for type data.
+            const perDeviceInfo = await this.getDeviceTypeInfoForMsg(deviceKey);
+            const indexTypeInfo = await this.getDeviceTypeInfoForMsg(busName, deviceTypeKeyOrIndex);
+            const deviceTypeInfo = indexTypeInfo ? this.withInstanceData(indexTypeInfo, deviceKey) : perDeviceInfo;
+            if (deviceTypeInfo !== undefined) {
+                this._deviceTypeIdSeen[deviceKey] = deviceTypeKeyOrIndex;
+            } else if (typeChanged && (deviceKey in this._devicesState)) {
+                // Never decode with the previous type's data
+                this._devicesState[deviceKey].deviceTypeInfo = undefined;
+            }
+
+            // Check if device record exists
+            if (deviceKey in this._devicesState) {
+                if (deviceTypeInfo !== undefined) {
+                    this._devicesState[deviceKey].deviceTypeInfo = deviceTypeInfo;
+                    this._devicesState[deviceKey].deviceType = deviceTypeKeyOrIndex;
+                    this._devicesState[deviceKey].deviceAddress = devAddr;
+                    this._devicesState[deviceKey].busName = busName;
+                }
+            } else {
+                // Create device record - device type info may be undefined
+                this._devicesState[deviceKey] = {
+                    deviceTypeInfo: deviceTypeInfo,
+                    deviceTimeline: {
+                        timestampsUs: [],
+                        lastReportTimestampUs: 0,
+                        reportTimestampOffsetUs: 0,
+                        totalSamplesAdded: 0,
+                        emaLastSampleTimeUs: 0,
+                        emaIntervalUs: 0,
+                        emaPrevPollTimeUs: 0,
+                        emaCalibrated: false,
+                        emaCalibrationPolls: 0
+                    },
+                    deviceAttributes: {},
+                    deviceIsNew: true,
+                    stateChanged: false,
+                    onlineState: DeviceOnlineState.Online,
+                    deviceAddress: devAddr,
+                    deviceType: deviceTypeKeyOrIndex,
+                    busName: busName
+                };
+            }
+        }
+
+        // Get device state
+        const deviceState = this._devicesState[deviceKey];
+
+        // Check for online/offline/pending-deletion state information
+        if (attrGroups && typeof attrGroups === "object" && "_o" in attrGroups) {
+            const onlineStateVal = typeof attrGroups._o === 'number' ? attrGroups._o : parseInt(String(attrGroups._o), 10);
+            if (onlineStateVal === 2) {
+                // Pending deletion - remove device and skip further processing
+                this.removeDevice(deviceKey);
+                return;
+            }
+            deviceState.onlineState = onlineStateVal === 1 ? DeviceOnlineState.Online : DeviceOnlineState.Offline;
+        }
+
+        // Check if device type info is available
+        if (!deviceState.deviceTypeInfo) {
+            return;
+        }
+
+        const markers = this.extractMarkers(attrGroups);
+
+        // Iterate attribute groups
+        Object.entries(attrGroups).forEach(([attrGroupName, msgHexStr]) => {
+
+            // Check valid
+            if (attrGroupName.startsWith("_") || (typeof msgHexStr != 'string')) {
+                return;
+            }
+
+            // Check the device type info
+            if (!deviceState.deviceTypeInfo!.resp) {
+                return;
+            }
+
+            // Convert the hex string to an arraybuffer by converting each pair of hex chars to a byte
+            const msgBytes = this.hexToBytes(msgHexStr);
+
+            // Work through the message which may contain multiple data instances
+            let msgBufIdx = 0;
+
+            // Iterate over attributes in the group
+            const pollRespMetadata = deviceState.deviceTypeInfo!.resp!;
+
+            const attrLengthsBefore = this.snapshotAttrLengths(deviceState.deviceAttributes, pollRespMetadata);
+            const timelineLenBefore = deviceState.deviceTimeline.timestampsUs.length;
+            const totalSamplesBefore = deviceState.deviceTimeline.totalSamplesAdded;
+
+            // Loop
+            while (msgBufIdx < msgBytes.length) {
+
+                const newMsgBufIdx = this._attributeHandler.processMsgAttrGroup(msgBytes, msgBufIdx,
+                    deviceState.deviceTimeline, pollRespMetadata,
+                    deviceState.deviceAttributes,
+                    this._maxDatapointsToStore);
+                if (newMsgBufIdx < 0)
+                    break;
+                msgBufIdx = newMsgBufIdx;
+                deviceState.stateChanged = true;
+            }
+
+            this.emitDecodedData(deviceKey, busName, devAddr, deviceState, pollRespMetadata,
+                attrLengthsBefore, timelineLenBefore, attrGroupName, markers);
+
+            const newSamples = deviceState.deviceTimeline.totalSamplesAdded - totalSamplesBefore;
+            this.updateDeviceStats(deviceKey, newSamples, Date.now());
+        });
     }
 
     ////////////////////////////////////////////////////////////////////////////

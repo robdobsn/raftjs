@@ -410,6 +410,19 @@ describe("DeviceManager client message ordering", () => {
         expect(deviceManager.getDeviceState("1_129").deviceAttributes.v.values).toEqual([100]);
     });
 
+    it("has decoded a devjson message's devices when the handler resolves, in message order", async () => {
+        const deviceManager = await makeSlowTypeInfoManager(50);
+        // Message 1: the slow device (type 9) first, then the fast device's sample 1; message 2: fast sample 2
+        const p1 = deviceManager.handleClientMsgJson(JSON.stringify(
+            { "1": { "129": { "_i": 9, "_o": 1, "0": "000a0064" }, "15": { "_i": 4, "_o": 1, "0": "000a0001" } } }));
+        const p2 = deviceManager.handleClientMsgJson(JSON.stringify({ "1": { "15": { "_i": 4, "_o": 1, "0": "00140002" } } }));
+        await p1;
+        expect(deviceManager.getDeviceState("1_129").deviceAttributes.v.values).toEqual([100]);
+        expect(deviceManager.getDeviceState("1_15").deviceAttributes.v.values).toEqual([1]);
+        await p2;
+        expect(deviceManager.getDeviceState("1_15").deviceAttributes.v.values).toEqual([1, 2]);
+    });
+
     it("does not hold up later messages for long when a type info request never answers", async () => {
         const deviceManager = await makeSlowTypeInfoManager(-1);
         const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
@@ -531,15 +544,9 @@ describe("DeviceManager decodes each record with its own device type index", () 
     it("switches type on a devjson record whose index changes", async () => {
         const { deviceManager, ready } = makeManager({ "4": wordInfo, "5": pairInfo }, {});
         await ready;
-        // devjson devices are processed without the handler awaiting them, so wait for the result
-        const settle = async (done: () => boolean) => {
-            for (let i = 0; (i < 50) && !done(); i++) await new Promise(r => setTimeout(r, 1));
-        };
         await deviceManager.handleClientMsgJson(JSON.stringify({ "1": { "15": { "_i": 4, "_o": 1, "0": "000a1234" } } }));
-        await settle(() => deviceManager.getDeviceState("1_15")?.deviceAttributes.v !== undefined);
         expect(deviceManager.getDeviceState("1_15").deviceAttributes.v.values).toEqual([0x1234]);
         await deviceManager.handleClientMsgJson(JSON.stringify({ "1": { "15": { "_i": 5, "_o": 1, "0": "00140102" } } }));
-        await settle(() => deviceManager.getDeviceState("1_15")?.deviceAttributes.a !== undefined);
         const state = deviceManager.getDeviceState("1_15");
         expect(state.deviceTypeInfo?.resp?.a.map(a => a.n)).toEqual(["a", "b"]);
         expect(state.deviceAttributes.a.values).toEqual([1]);
