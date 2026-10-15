@@ -97,8 +97,23 @@ export class DeviceManager implements RaftDeviceMgrIF{
         this._deviceStats[deviceKey] = this.createEmptyStats();
     }
 
-    // Cached device type data
+    // Cached device type data. Type data is keyed by device type index (bustype:<bus>:<index>), which means one
+    // record for a whole firmware boot - but can mean a different record after a reboot, OTA or type file
+    // change - so these caches last for one subscription (see clearDeviceTypeCaches()). Type data must be
+    // looked up by each record's own index, never by device ID, because the device at a device ID can change
+    // type (it is re-identified, or a different device is plugged in)
     private _cachedDeviceTypeRecs: DeviceTypeInfoRecs = {};
+
+    // Per device ID: the device type index (or type key from older firmware) its type data was resolved for.
+    // A record with a different one means the device has changed type
+    private _deviceTypeIdSeen: { [deviceKey: string]: string } = {};
+
+    // Per device ID: instance data (name, role) from the per-device typeinfo request. It belongs to the
+    // device's location, not its type, so it is kept when the device changes type
+    private _deviceInstanceData: { [deviceKey: string]: { name?: string; role?: string } } = {};
+
+    // Incremented when the type caches are cleared, so a request started before then doesn't refill them
+    private _typeCacheGeneration = 0;
 
     // Cached device type previous attempt times
     private _cachedDeviceTypePreviousAttemptTimes: { [deviceType: string]: number } = {};
@@ -126,6 +141,54 @@ export class DeviceManager implements RaftDeviceMgrIF{
 
     // Constructor
     constructor() {
+    }
+
+    ////////////////////////////////////////////////////////////////////////////
+    // Clear cached device type data
+    ////////////////////////////////////////////////////////////////////////////
+
+    /**
+     * Clear cached device type data (decode metadata keyed by device type index, and per-device instance data).
+     * A device type index means the same record for a whole firmware boot but may mean a different one after a
+     * reboot, OTA or type file change, so the cache is valid for one subscription. RaftConnector calls this
+     * before it subscribes or re-subscribes; an app that subscribes itself should call it first.
+     * Devices keep their current type data until the next record for them is processed, when it is looked
+     * up again.
+     */
+    public clearDeviceTypeCaches(): void {
+        this._cachedDeviceTypeRecs = {};
+        this._cachedDeviceTypePreviousAttemptTimes = {};
+        this._deviceTypeIdSeen = {};
+        this._deviceInstanceData = {};
+        this._typeCacheGeneration++;
+    }
+
+    // Note the device type (index, or key from older firmware) of a record for a device. If the device has
+    // changed type its per-device data is forgotten so it is requested again. Returns true if the device's type
+    // data needs to be resolved (new device, type changed, or not resolved since the caches were cleared)
+    private noteRecordDeviceType(deviceKey: string, typeId: string): { needsResolve: boolean; typeChanged: boolean } {
+        const prevTypeId = this._deviceTypeIdSeen[deviceKey];
+        const typeChanged = (prevTypeId !== undefined) && (prevTypeId !== typeId);
+        if (typeChanged) {
+            delete this._cachedDeviceTypeRecs[deviceKey];
+            delete this._cachedDeviceTypePreviousAttemptTimes[deviceKey];
+            delete this._deviceTypeIdSeen[deviceKey];
+        }
+        const deviceState = this._devicesState[deviceKey];
+        const needsResolve = !deviceState || (deviceState.deviceTypeInfo === undefined) || (prevTypeId !== typeId);
+        return { needsResolve, typeChanged };
+    }
+
+    // Type data for decoding a device's records with its instance data (name, role) applied
+    private withInstanceData(typeInfo: DeviceTypeInfo, deviceKey: string): DeviceTypeInfo {
+        const instanceData = this._deviceInstanceData[deviceKey];
+        if (!instanceData || ((instanceData.name === undefined) && (instanceData.role === undefined))) {
+            return typeInfo;
+        }
+        const merged: DeviceTypeInfo = { ...typeInfo };
+        if (instanceData.name !== undefined) merged.name = instanceData.name;
+        if (instanceData.role !== undefined) merged.role = instanceData.role;
+        return merged;
     }
 
     ////////////////////////////////////////////////////////////////////////////
@@ -451,27 +514,38 @@ export class DeviceManager implements RaftDeviceMgrIF{
                 continue;
             }
 
-            // Check if a device state already exists
-            if (!(deviceKey in this._devicesState) || (this._devicesState[deviceKey].deviceTypeInfo === undefined)) {
+            // Check if the device's type data needs resolving (new device, or its type has changed)
+            const typeId = deviceTypeIndex.toString();
+            const { needsResolve, typeChanged } = this.noteRecordDeviceType(deviceKey, typeId);
+            if (needsResolve) {
 
-                // For DevbinV1Framed (current firmware) try the richer
-                // per-device endpoint first (gives per-instance name/role),
-                // then fall back to the bus/type schema. DevbinV0Fixed firmware
-                // doesn't support the per-device endpoint (returns
-                // failBusMissing) so we skip it entirely for DevbinV0Fixed
-                // records to avoid noisy requests.
-                const deviceTypeInfo = recordPayloadFormat === "DevbinV1Framed"
-                    ? (await this.getDeviceTypeInfoForMsg(deviceKey)
-                        ?? resolvedDeviceTypeInfo
-                        ?? await this.getDeviceTypeInfoForMsg(busNum.toString(), deviceTypeIndex.toString()))
-                    : (resolvedDeviceTypeInfo
-                        ?? await this.getDeviceTypeInfoForMsg(busNum.toString(), deviceTypeIndex.toString()));
+                // Decode with the type data for this record's device type index. For DevbinV1Framed
+                // (current firmware) the per-device endpoint gives the per-instance name/role (and is
+                // the fallback for type data). DevbinV0Fixed firmware doesn't support the per-device
+                // endpoint (returns failBusMissing) so we skip it entirely for DevbinV0Fixed records to
+                // avoid noisy requests.
+                const indexTypeInfo = resolvedDeviceTypeInfo
+                    ?? await this.getDeviceTypeInfoForMsg(busNum.toString(), typeId);
+                let deviceTypeInfo: DeviceTypeInfo | undefined;
+                if (recordPayloadFormat === "DevbinV1Framed") {
+                    const perDeviceInfo = await this.getDeviceTypeInfoForMsg(deviceKey);
+                    deviceTypeInfo = indexTypeInfo ? this.withInstanceData(indexTypeInfo, deviceKey) : perDeviceInfo;
+                } else {
+                    deviceTypeInfo = indexTypeInfo;
+                }
+                if (deviceTypeInfo !== undefined) {
+                    this._deviceTypeIdSeen[deviceKey] = typeId;
+                } else if (typeChanged && (deviceKey in this._devicesState)) {
+                    // Never decode with the previous type's data
+                    this._devicesState[deviceKey].deviceTypeInfo = undefined;
+                }
                 
                 // Debug
                 // console.log(`DevMan.handleClientMsgBinary debugIdx ${debugMsgIndex} pollDataPos ${pollDataPos} busNum ${busNum} devAddr 0x${devAddr.toString(16)} devTypeIdx ${deviceTypeIndex} deviceTypeInfo ${JSON.stringify(deviceTypeInfo)}`);
 
-                // Handle case where device type info is not available
-                if (deviceTypeInfo === undefined) {
+                // Handle case where device type info is not available (a device whose type hasn't changed
+                // keeps the type data it has)
+                if ((deviceTypeInfo === undefined) && !this._devicesState[deviceKey]?.deviceTypeInfo) {
                     console.warn(`DevMan.handleClientMsgBinary debugIdx ${debugMsgIndex} deviceType ${deviceTypeIndex} info not available, skipping attribute processing for this record`);
                     // Skip to next record without processing attributes
                     msgPos += recordLenLen + recordLen;
@@ -712,14 +786,22 @@ export class DeviceManager implements RaftDeviceMgrIF{
                 // Update the last update time
                 this._deviceLastUpdateTime[deviceKey] = Date.now();
 
-                // Check if a device state already exists
-                if (!(deviceKey in this._devicesState) || (this._devicesState[deviceKey].deviceTypeInfo === undefined)) {
+                // Check if the device's type data needs resolving (new device, or its type has changed)
+                const { needsResolve, typeChanged } = this.noteRecordDeviceType(deviceKey, deviceTypeKeyOrIndex);
+                if (needsResolve) {
 
-                    // Try the per-device endpoint first (current firmware) and
-                    // fall back to the bus/type endpoint used by legacy
-                    // firmware and the simulator.
-                    const deviceTypeInfo = await this.getDeviceTypeInfoForMsg(deviceKey)
-                        ?? await this.getDeviceTypeInfoForMsg(busName, deviceTypeKeyOrIndex);
+                    // Decode with the type data for this record's device type index (or type key from
+                    // legacy firmware and the simulator). The per-device endpoint (current firmware) gives
+                    // the per-instance name/role, and is the fallback for type data.
+                    const perDeviceInfo = await this.getDeviceTypeInfoForMsg(deviceKey);
+                    const indexTypeInfo = await this.getDeviceTypeInfoForMsg(busName, deviceTypeKeyOrIndex);
+                    const deviceTypeInfo = indexTypeInfo ? this.withInstanceData(indexTypeInfo, deviceKey) : perDeviceInfo;
+                    if (deviceTypeInfo !== undefined) {
+                        this._deviceTypeIdSeen[deviceKey] = deviceTypeKeyOrIndex;
+                    } else if (typeChanged && (deviceKey in this._devicesState)) {
+                        // Never decode with the previous type's data
+                        this._devicesState[deviceKey].deviceTypeInfo = undefined;
+                    }
 
                     // Check if device record exists
                     if (deviceKey in this._devicesState) {
@@ -882,6 +964,9 @@ export class DeviceManager implements RaftDeviceMgrIF{
         delete this._devicesState[deviceKey];
         delete this._deviceLastUpdateTime[deviceKey];
         delete this._deviceStats[deviceKey];
+        delete this._deviceTypeIdSeen[deviceKey];
+        delete this._cachedDeviceTypeRecs[deviceKey];
+        delete this._cachedDeviceTypePreviousAttemptTimes[deviceKey];
     }
 
     ////////////////////////////////////////////////////////////////////////////
@@ -1001,6 +1086,7 @@ export class DeviceManager implements RaftDeviceMgrIF{
 
     private async executeDeviceTypeInfoRequest(deviceKeyOrBusName: string, deviceType: string | undefined, cacheKey: string): Promise<DeviceTypeInfo | undefined> {
         this._cachedDeviceTypePreviousAttemptTimes[cacheKey] = Date.now();
+        const generation = this._typeCacheGeneration;
 
         try {
             // Current firmware accepts the richer deviceid query with
@@ -1018,6 +1104,10 @@ export class DeviceManager implements RaftDeviceMgrIF{
                     // type record resolved via the per-device endpoint) cannot be used to
                     // decode attributes - treat it as not-found so callers fall back to
                     // the bus/type-index lookup instead of caching an empty record.
+                    // Instance data (name, role) belongs to the device ID, whatever its type
+                    if ((deviceType === undefined) && (generation === this._typeCacheGeneration)) {
+                        this._deviceInstanceData[deviceKeyOrBusName] = { name: msgRslt.name, role: msgRslt.role };
+                    }
                     if (!msgRslt.devinfo) {
                         return undefined;
                     }
@@ -1025,7 +1115,11 @@ export class DeviceManager implements RaftDeviceMgrIF{
                     const base: DeviceTypeInfo = { ...msgRslt.devinfo };
                     if (msgRslt.name !== undefined) base.name = msgRslt.name;
                     if (msgRslt.role !== undefined) base.role = msgRslt.role;
-                    this._cachedDeviceTypeRecs[cacheKey] = base;
+                    // A request started before the caches were cleared (e.g. before a reboot) may be for a
+                    // different meaning of the index, so it doesn't refill the cache
+                    if (generation === this._typeCacheGeneration) {
+                        this._cachedDeviceTypeRecs[cacheKey] = base;
+                    }
                     return base;
                 }
             }

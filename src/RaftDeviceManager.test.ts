@@ -431,3 +431,117 @@ describe("DeviceManager client message ordering", () => {
         expect(deviceManager.getDeviceState("1_15").deviceAttributes.v.values).toEqual([1, 2]);
     }, 10000);
 });
+
+// ===== Decode by device type index (the device at a device ID can change type) =====
+
+describe("DeviceManager decodes each record with its own device type index", () => {
+    const wordInfo = makeTypeInfo("Word", 2, [{ n: "v", t: ">H" }]);
+    const pairInfo = makeTypeInfo("Pair", 2, [{ n: "a", t: "B" }, { n: "b", t: "B" }]);
+    const sample = (ts: number, hi: number, lo: number) => [...u16(ts), hi, lo];
+
+    // Firmware stand-in: bus/type lookups answer from typesByIndex, per-device lookups from perDevice
+    // (both may be changed by a test). Records each request made
+    function makeManager(typesByIndex: Record<string, DeviceTypeInfo>,
+            perDevice: Record<string, { name?: string; role?: string; typeIndex?: string }>) {
+        const requests: string[] = [];
+        const msgHandler = {
+            sendRICRESTURL: jest.fn(async (cmd: string) => {
+                requests.push(cmd);
+                const params = new URLSearchParams(cmd.split("?")[1]);
+                const deviceId = params.get("deviceid");
+                if (deviceId !== null) {
+                    const dev = perDevice[deviceId];
+                    if (!dev) return { rslt: "fail" };
+                    const devinfo = dev.typeIndex !== undefined ? typesByIndex[dev.typeIndex] : undefined;
+                    return { rslt: "ok", devinfo, name: dev.name, role: dev.role };
+                }
+                const devinfo = typesByIndex[params.get("type") ?? ""];
+                return devinfo ? { rslt: "ok", devinfo } : { rslt: "fail" };
+            })
+        };
+        const systemUtils = {
+            getMsgHandler: () => msgHandler,
+            getPublishTopicName: () => "devbin"
+        } as unknown as RaftSystemUtils;
+        const deviceManager = new DeviceManager();
+        return { deviceManager, requests, ready: deviceManager.setup(systemUtils) };
+    }
+
+    it("switches to the new type's data when a device's type index changes", async () => {
+        const { deviceManager, ready } = makeManager({ "4": wordInfo, "5": pairInfo }, {});
+        await ready;
+        await deviceManager.handleClientMsgBinary(devbinFrame([devbinRecord(0x81, 0x15, 4, 1, [sample(10, 0x12, 0x34)])]));
+        expect(deviceManager.getDeviceState("1_15").deviceType).toBe("Word");
+        expect(deviceManager.getDeviceState("1_15").deviceAttributes.v.values).toEqual([0x1234]);
+
+        // Same device ID, re-identified as a different type
+        await deviceManager.handleClientMsgBinary(devbinFrame([devbinRecord(0x81, 0x15, 5, 2, [sample(20, 0x01, 0x02)])]));
+        const state = deviceManager.getDeviceState("1_15");
+        expect(state.deviceType).toBe("Pair");
+        expect(state.deviceAttributes.a.values).toEqual([1]);
+        expect(state.deviceAttributes.b.values).toEqual([2]);
+        // Nothing was decoded with the old type's layout
+        expect(state.deviceAttributes.v.values).toEqual([0x1234]);
+    });
+
+    it("decodes by the record's index even if the per-device lookup reports another type", async () => {
+        // The per-device lookup answered while the device was still the old type
+        const { deviceManager, ready } = makeManager({ "4": wordInfo, "5": pairInfo }, { "1_15": { typeIndex: "4" } });
+        await ready;
+        await deviceManager.handleClientMsgBinary(devbinFrame([devbinRecord(0x81, 0x15, 5, 1, [sample(10, 0x01, 0x02)])]));
+        const state = deviceManager.getDeviceState("1_15");
+        expect(state.deviceType).toBe("Pair");
+        expect(state.deviceAttributes.a.values).toEqual([1]);
+    });
+
+    it("keeps the device's name and role (instance data) across a type change", async () => {
+        const { deviceManager, ready } = makeManager({ "4": wordInfo, "5": pairInfo },
+            { "1_15": { name: "LeftArm", role: "system", typeIndex: "4" } });
+        await ready;
+        await deviceManager.handleClientMsgBinary(devbinFrame([devbinRecord(0x81, 0x15, 4, 1, [sample(10, 0, 1)])]));
+        expect(deviceManager.getDeviceState("1_15").deviceTypeInfo?.name).toBe("LeftArm");
+        expect(deviceManager.getDeviceState("1_15").deviceTypeInfo?.role).toBe("system");
+
+        await deviceManager.handleClientMsgBinary(devbinFrame([devbinRecord(0x81, 0x15, 5, 2, [sample(20, 1, 2)])]));
+        const info = deviceManager.getDeviceState("1_15").deviceTypeInfo;
+        expect(info?.name).toBe("LeftArm");
+        expect(info?.role).toBe("system");
+        expect(info?.resp?.a.map(a => a.n)).toEqual(["a", "b"]);
+    });
+
+    it("looks type data up again after the caches are cleared (an index can change meaning across a reboot)", async () => {
+        const typesByIndex: Record<string, DeviceTypeInfo> = { "4": wordInfo };
+        const { deviceManager, requests, ready } = makeManager(typesByIndex, {});
+        await ready;
+        await deviceManager.handleClientMsgBinary(devbinFrame([devbinRecord(0x81, 0x15, 4, 1, [sample(10, 0x12, 0x34)])]));
+        await deviceManager.handleClientMsgBinary(devbinFrame([devbinRecord(0x81, 0x15, 4, 2, [sample(20, 0x56, 0x78)])]));
+        const typeRequestsBefore = requests.filter(r => r.includes("type=4")).length;
+        expect(typeRequestsBefore).toBe(1);
+
+        // The device rebooted with firmware where index 4 is a different record; raftjs re-subscribes
+        typesByIndex["4"] = pairInfo;
+        deviceManager.clearDeviceTypeCaches();
+        await deviceManager.handleClientMsgBinary(devbinFrame([devbinRecord(0x81, 0x15, 4, 1, [sample(30, 0x01, 0x02)])]));
+        const state = deviceManager.getDeviceState("1_15");
+        expect(requests.filter(r => r.includes("type=4")).length).toBe(2);
+        expect(state.deviceType).toBe("Pair");
+        expect(state.deviceAttributes.a.values).toEqual([1]);
+    });
+
+    it("switches type on a devjson record whose index changes", async () => {
+        const { deviceManager, ready } = makeManager({ "4": wordInfo, "5": pairInfo }, {});
+        await ready;
+        // devjson devices are processed without the handler awaiting them, so wait for the result
+        const settle = async (done: () => boolean) => {
+            for (let i = 0; (i < 50) && !done(); i++) await new Promise(r => setTimeout(r, 1));
+        };
+        await deviceManager.handleClientMsgJson(JSON.stringify({ "1": { "15": { "_i": 4, "_o": 1, "0": "000a1234" } } }));
+        await settle(() => deviceManager.getDeviceState("1_15")?.deviceAttributes.v !== undefined);
+        expect(deviceManager.getDeviceState("1_15").deviceAttributes.v.values).toEqual([0x1234]);
+        await deviceManager.handleClientMsgJson(JSON.stringify({ "1": { "15": { "_i": 5, "_o": 1, "0": "00140102" } } }));
+        await settle(() => deviceManager.getDeviceState("1_15")?.deviceAttributes.a !== undefined);
+        const state = deviceManager.getDeviceState("1_15");
+        expect(state.deviceTypeInfo?.resp?.a.map(a => a.n)).toEqual(["a", "b"]);
+        expect(state.deviceAttributes.a.values).toEqual([1]);
+    });
+});

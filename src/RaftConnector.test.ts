@@ -199,6 +199,25 @@ describe("RaftConnector reconnect deadline", () => {
     )).toHaveLength(0);
   });
 
+  it("clears the device manager's type caches before re-subscribing after a reconnect", async () => {
+    const channel = makeChannel(async () => true);
+    (channel as unknown as { requiresSubscription: () => boolean }).requiresSubscription = () => true;
+    const connector = new RaftConnector();
+    configureRetry(connector, channel, 60);
+
+    // Device type data keyed by index lasts for one subscription (the device may have rebooted)
+    const calls: string[] = [];
+    (connector as unknown as { _systemType: object })._systemType = {
+      subscribeForUpdates: jest.fn(async () => { calls.push("subscribe"); }),
+      deviceMgrIF: { clearDeviceTypeCaches: jest.fn(() => { calls.push("clear"); }) },
+    };
+
+    connector.onConnEvent(RaftConnEvent.CONN_DISCONNECTED);
+    await jest.advanceTimersByTimeAsync(10);
+
+    expect(calls).toEqual(["clear", "subscribe"]);
+  });
+
   it("emits recovery degraded when reconnect subscription restoration fails", async () => {
     const channel = makeChannel(async () => true);
     (channel as unknown as { requiresSubscription: () => boolean }).requiresSubscription = () => true;

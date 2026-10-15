@@ -21,6 +21,10 @@ export default interface RaftDeviceMgrIF {
     // Settings
     setMaxDataPointsToStore(maxDataPointsToStore: number): void;
 
+    // Clear cached device type data - type data keyed by device type index is valid for one subscription.
+    // Optional so that other implementations of this interface still conform
+    clearDeviceTypeCaches?(): void;
+
     // Callbacks
     addNewDeviceCallback(callback: (deviceKey: string, state: DeviceState) => void): void;
     removeNewDeviceCallback(callback: (deviceKey: string, state: DeviceState) => void): void;

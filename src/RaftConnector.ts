@@ -423,6 +423,8 @@ export default class RaftConnector {
         this._systemType.subscribeForUpdates &&
         this._raftChannel.requiresSubscription()) {
         try {
+          // Device type data keyed by index is valid for one subscription
+          this._systemType.deviceMgrIF?.clearDeviceTypeCaches?.();
           // Subscription
           await this._systemType.subscribeForUpdates(this._raftSystemUtils, true);
           RaftLog.info(`connect subscribed for updates`);
@@ -1157,6 +1159,8 @@ export default class RaftConnector {
       this._systemType.subscribeForUpdates &&
       this._raftChannel.requiresSubscription()) {
       try {
+        // Device type data keyed by index is valid for one subscription (the device may have rebooted)
+        this._systemType.deviceMgrIF?.clearDeviceTypeCaches?.();
         await this._systemType.subscribeForUpdates(this._raftSystemUtils, true);
         RaftLog.info(`reconnect re-subscribed for updates`);
       } catch (error: unknown) {
