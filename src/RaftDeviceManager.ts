@@ -692,14 +692,14 @@ export class DeviceManager implements RaftDeviceMgrIF{
                     return;
                 }
 
-                // Device type name
-                let deviceTypeName = "";
+                // Device type key (_t, sent by older firmware) or device type index (_i) as a string
+                let deviceTypeKeyOrIndex = "";
                 let deviceTypeIdx = -1;
                 if (attrGroups && typeof attrGroups === 'object' && "_t" in attrGroups && typeof attrGroups._t === "string") {
-                    deviceTypeName = attrGroups._t || "";
+                    deviceTypeKeyOrIndex = attrGroups._t || "";
                 } else if (attrGroups && typeof attrGroups === 'object' && "_i" in attrGroups && typeof attrGroups._i === "number") {
                     deviceTypeIdx = attrGroups._i ?? -1;
-                    deviceTypeName = deviceTypeIdx.toString();
+                    deviceTypeKeyOrIndex = deviceTypeIdx.toString();
                 } else
                 {
                     console.warn(`DeviceManager missing device type attrGroups ${JSON.stringify(attrGroups)}`);
@@ -719,13 +719,13 @@ export class DeviceManager implements RaftDeviceMgrIF{
                     // fall back to the bus/type endpoint used by legacy
                     // firmware and the simulator.
                     const deviceTypeInfo = await this.getDeviceTypeInfoForMsg(deviceKey)
-                        ?? await this.getDeviceTypeInfoForMsg(busName, deviceTypeName);
+                        ?? await this.getDeviceTypeInfoForMsg(busName, deviceTypeKeyOrIndex);
 
                     // Check if device record exists
                     if (deviceKey in this._devicesState) {
                         if (deviceTypeInfo !== undefined) {
                             this._devicesState[deviceKey].deviceTypeInfo = deviceTypeInfo;
-                            this._devicesState[deviceKey].deviceType = deviceTypeName;
+                            this._devicesState[deviceKey].deviceType = deviceTypeKeyOrIndex;
                             this._devicesState[deviceKey].deviceAddress = devAddr;
                             this._devicesState[deviceKey].busName = busName;
                         }
@@ -749,7 +749,7 @@ export class DeviceManager implements RaftDeviceMgrIF{
                             stateChanged: false,
                             onlineState: DeviceOnlineState.Online,
                             deviceAddress: devAddr,
-                            deviceType: deviceTypeName,
+                            deviceType: deviceTypeKeyOrIndex,
                             busName: busName
                         };
                     }

@@ -185,6 +185,7 @@ export type RaftDevTypeInfoResponse = {
     rslt: string;
     devinfo?: DeviceTypeInfo;
     dtIdx?: number;
+    deviceTypeKey?: string;     // device type key of the record (firmware from 2026-10-15)
     name?: string;
     role?: string;
   };
