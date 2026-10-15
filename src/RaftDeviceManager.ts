@@ -393,7 +393,7 @@ export class DeviceManager implements RaftDeviceMgrIF{
             recordPos += deviceAddrLen;
 
             // Device type index (uint16 big-endian)
-            const devTypeIdx = (rxMsg[recordPos] << 8) + rxMsg[recordPos + 1];
+            const deviceTypeIndex = (rxMsg[recordPos] << 8) + rxMsg[recordPos + 1];
             recordPos += devTypeIdxLen;
 
             // Common record header ends here. The deviceSeqNum byte is only
@@ -403,11 +403,11 @@ export class DeviceManager implements RaftDeviceMgrIF{
 
             // Resolve per-record payload format using the type schema (if
             // already cached). DevbinV0Fixed firmware reports bus=0 addr=0 for
-            // all direct devices, so we briefly look up by bus/devTypeIdx to
+            // all direct devices, so we briefly look up by bus/device type index to
             // find the schema before settling on the device key.
             let recordPayloadFormat = payloadFormat;
             let recordHeaderLen = recordPayloadFormat === "DevbinV1Framed" ? devbinV1FramedHeaderLen : devbinV0FixedHeaderLen;
-            const resolvedDeviceTypeInfo = await this.getDeviceTypeInfoForMsg(busNum.toString(), devTypeIdx.toString());
+            const resolvedDeviceTypeInfo = await this.getDeviceTypeInfoForMsg(busNum.toString(), deviceTypeIndex.toString());
             if (resolvedDeviceTypeInfo?.resp) {
                 recordPayloadFormat = this.resolveRecordPayloadFormat(rxMsg, commonRecordHeaderEndPos,
                     samplesEndPos, resolvedDeviceTypeInfo.resp, recordPayloadFormat, deviceSeqNumLen);
@@ -432,14 +432,14 @@ export class DeviceManager implements RaftDeviceMgrIF{
 
             // Debug
             // console.log(`DevMan.handleClientMsgBinary debugIdx ${debugMsgIndex} overallLen ${rxMsg.length} recordStart ${msgPos} recordLen ${recordLen} ${pollDataPos} ${RaftUtils.bufferToHex(rxMsg.slice(msgPos, msgPos + recordLenLen + recordLen))}`);
-            // console.log(`DevMan.handleClientMsgBinary debugIdx ${debugMsgIndex} bus ${busNum} isOnline ${isOnline} devAddr 0x${devAddr.toString(16)} devTypeIdx ${devTypeIdx} pollDataLen ${recordLen - recordHeaderLen}`);
+            // console.log(`DevMan.handleClientMsgBinary debugIdx ${debugMsgIndex} bus ${busNum} isOnline ${isOnline} devAddr 0x${devAddr.toString(16)} devTypeIdx ${deviceTypeIndex} pollDataLen ${recordLen - recordHeaderLen}`);
 
             // Format device address as canonical hex and build device key.
-            // Direct-connect devices (bus=0 addr=0) with different devTypeIdx
+            // Direct-connect devices (bus=0 addr=0) with different device type index
             // values would collide on the same "0_0" key, so records
-            // disambiguate by appending the devTypeIdx.
+            // disambiguate by appending the device type index.
             const devAddrHex = formatDeviceAddrHex(devAddr);
-            const deviceKey = this.getBinaryDeviceKey(busNum, devAddrHex, devTypeIdx);
+            const deviceKey = this.getBinaryDeviceKey(busNum, devAddrHex, deviceTypeIndex);
 
             // Update the last update time
             this._deviceLastUpdateTime[deviceKey] = Date.now();
@@ -463,16 +463,16 @@ export class DeviceManager implements RaftDeviceMgrIF{
                 const deviceTypeInfo = recordPayloadFormat === "DevbinV1Framed"
                     ? (await this.getDeviceTypeInfoForMsg(deviceKey)
                         ?? resolvedDeviceTypeInfo
-                        ?? await this.getDeviceTypeInfoForMsg(busNum.toString(), devTypeIdx.toString()))
+                        ?? await this.getDeviceTypeInfoForMsg(busNum.toString(), deviceTypeIndex.toString()))
                     : (resolvedDeviceTypeInfo
-                        ?? await this.getDeviceTypeInfoForMsg(busNum.toString(), devTypeIdx.toString()));
+                        ?? await this.getDeviceTypeInfoForMsg(busNum.toString(), deviceTypeIndex.toString()));
                 
                 // Debug
-                // console.log(`DevMan.handleClientMsgBinary debugIdx ${debugMsgIndex} pollDataPos ${pollDataPos} busNum ${busNum} devAddr 0x${devAddr.toString(16)} devTypeIdx ${devTypeIdx} deviceTypeInfo ${JSON.stringify(deviceTypeInfo)}`);
+                // console.log(`DevMan.handleClientMsgBinary debugIdx ${debugMsgIndex} pollDataPos ${pollDataPos} busNum ${busNum} devAddr 0x${devAddr.toString(16)} devTypeIdx ${deviceTypeIndex} deviceTypeInfo ${JSON.stringify(deviceTypeInfo)}`);
 
                 // Handle case where device type info is not available
                 if (deviceTypeInfo === undefined) {
-                    console.warn(`DevMan.handleClientMsgBinary debugIdx ${debugMsgIndex} deviceType ${devTypeIdx} info not available, skipping attribute processing for this record`);
+                    console.warn(`DevMan.handleClientMsgBinary debugIdx ${debugMsgIndex} deviceType ${deviceTypeIndex} info not available, skipping attribute processing for this record`);
                     // Skip to next record without processing attributes
                     msgPos += recordLenLen + recordLen;
                     continue;
@@ -562,9 +562,9 @@ export class DeviceManager implements RaftDeviceMgrIF{
                         if (newMsgBufIdx < 0)
                         {
                             this.warnMalformedSample(
-                                `${deviceKey}:${devTypeIdx}:DevbinV1Framed`,
+                                `${deviceKey}:${deviceTypeIndex}:DevbinV1Framed`,
                                 `DevMan.handleClientMsgBinary debugIdx ${debugMsgIndex} skipped malformed sample ` +
-                                `device=${deviceKey} devTypeIdx=${devTypeIdx} sampleLen=${sampleLen} respBytes=${pollRespMetadata.b}`
+                                `device=${deviceKey} devTypeIdx=${deviceTypeIndex} sampleLen=${sampleLen} respBytes=${pollRespMetadata.b}`
                             );
                             pollDataPos += sampleLen;
                             continue;
@@ -578,9 +578,9 @@ export class DeviceManager implements RaftDeviceMgrIF{
                     const fixedSampleLen = this.getDevbinV0FixedSampleLen(pollRespMetadata, pollDataPos, samplesEndPos);
                     if (fixedSampleLen <= 0) {
                         this.warnMalformedSample(
-                            `${deviceKey}:${devTypeIdx}:DevbinV0FixedLen`,
+                            `${deviceKey}:${deviceTypeIndex}:DevbinV0FixedLen`,
                             `DevMan.handleClientMsgBinary debugIdx ${debugMsgIndex} invalid DevbinV0Fixed sample length ` +
-                            `device=${deviceKey} devTypeIdx=${devTypeIdx} respBytes=${pollRespMetadata.b}`
+                            `device=${deviceKey} devTypeIdx=${deviceTypeIndex} respBytes=${pollRespMetadata.b}`
                         );
                     } else {
                         while (pollDataPos + fixedSampleLen <= samplesEndPos) {
@@ -603,9 +603,9 @@ export class DeviceManager implements RaftDeviceMgrIF{
                             if (newMsgBufIdx < 0)
                             {
                                 this.warnMalformedSample(
-                                    `${deviceKey}:${devTypeIdx}:DevbinV0Fixed`,
+                                    `${deviceKey}:${deviceTypeIndex}:DevbinV0Fixed`,
                                     `DevMan.handleClientMsgBinary debugIdx ${debugMsgIndex} skipped malformed DevbinV0Fixed sample ` +
-                                    `device=${deviceKey} devTypeIdx=${devTypeIdx} sampleLen=${fixedSampleLen} respBytes=${pollRespMetadata.b}`
+                                    `device=${deviceKey} devTypeIdx=${deviceTypeIndex} sampleLen=${fixedSampleLen} respBytes=${pollRespMetadata.b}`
                                 );
                                 pollDataPos += fixedSampleLen;
                                 continue;
@@ -617,9 +617,9 @@ export class DeviceManager implements RaftDeviceMgrIF{
 
                         if (pollDataPos < samplesEndPos) {
                             this.warnMalformedSample(
-                                `${deviceKey}:${devTypeIdx}:DevbinV0FixedRemainder`,
+                                `${deviceKey}:${deviceTypeIndex}:DevbinV0FixedRemainder`,
                                 `DevMan.handleClientMsgBinary debugIdx ${debugMsgIndex} skipped trailing DevbinV0Fixed sample bytes ` +
-                                `device=${deviceKey} devTypeIdx=${devTypeIdx} remaining=${samplesEndPos - pollDataPos} sampleLen=${fixedSampleLen} respBytes=${pollRespMetadata.b}`
+                                `device=${deviceKey} devTypeIdx=${deviceTypeIndex} remaining=${samplesEndPos - pollDataPos} sampleLen=${fixedSampleLen} respBytes=${pollRespMetadata.b}`
                             );
                         }
                     }
@@ -694,12 +694,12 @@ export class DeviceManager implements RaftDeviceMgrIF{
 
                 // Device type key (_t, sent by older firmware) or device type index (_i) as a string
                 let deviceTypeKeyOrIndex = "";
-                let deviceTypeIdx = -1;
+                let deviceTypeIndex = -1;
                 if (attrGroups && typeof attrGroups === 'object' && "_t" in attrGroups && typeof attrGroups._t === "string") {
                     deviceTypeKeyOrIndex = attrGroups._t || "";
                 } else if (attrGroups && typeof attrGroups === 'object' && "_i" in attrGroups && typeof attrGroups._i === "number") {
-                    deviceTypeIdx = attrGroups._i ?? -1;
-                    deviceTypeKeyOrIndex = deviceTypeIdx.toString();
+                    deviceTypeIndex = attrGroups._i ?? -1;
+                    deviceTypeKeyOrIndex = deviceTypeIndex.toString();
                 } else
                 {
                     console.warn(`DeviceManager missing device type attrGroups ${JSON.stringify(attrGroups)}`);
@@ -1134,14 +1134,14 @@ export class DeviceManager implements RaftDeviceMgrIF{
         return (fixedSampleLen > 0) && (payloadLen > 0) && (payloadLen % fixedSampleLen === 0);
     }
 
-    private getBinaryDeviceKey(busNum: number, devAddrHex: string, devTypeIdx: number): string {
+    private getBinaryDeviceKey(busNum: number, devAddrHex: string, deviceTypeIndex: number): string {
         const baseDeviceKey = getDeviceKey(busNum.toString(), devAddrHex);
         // Direct-connect devices all report bus=0 addr=0 regardless of payload
         // format (DevbinV0Fixed and DevbinV1Framed alike), so distinct device
         // types would otherwise collide on the same "0_0" key. Disambiguate by
         // appending the device type index.
         if ((busNum === 0) && (devAddrHex === "0")) {
-            return `${baseDeviceKey}_${devTypeIdx}`;
+            return `${baseDeviceKey}_${deviceTypeIndex}`;
         }
         return baseDeviceKey;
     }
