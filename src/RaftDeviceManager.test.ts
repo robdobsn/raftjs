@@ -552,3 +552,70 @@ describe("DeviceManager decodes each record with its own device type index", () 
         expect(state.deviceAttributes.a.values).toEqual([1]);
     });
 });
+
+describe("DeviceManager devman wrappers", () => {
+    async function makeManager(responses: Record<string, unknown>) {
+        const sent: string[] = [];
+        const msgHandler = {
+            sendRICRESTURL: jest.fn(async (cmd: string) => {
+                sent.push(cmd);
+                return responses[cmd.split("?")[0]] ?? { rslt: "fail" };
+            })
+        };
+        const systemUtils = {
+            getMsgHandler: () => msgHandler,
+            getPublishTopicName: () => "devbin"
+        } as unknown as RaftSystemUtils;
+        const deviceManager = new DeviceManager();
+        await deviceManager.setup(systemUtils);
+        return { deviceManager, sent };
+    }
+
+    test("form the endpoint requests", async () => {
+        const { deviceManager, sent } = await makeManager({});
+        await deviceManager.setDeviceName("1_68", "Arm IMU", true);
+        await deviceManager.setDeviceRole("1_68", "system");
+        await deviceManager.getDeviceTypes(10, 5);
+        await deviceManager.getIdentInfo("1_39");
+        await deviceManager.reIdentify({ unidentified: true });
+        await deviceManager.reIdentify({ type: "VL6180" });
+        await deviceManager.reIdentify({ deviceKey: "1_229" });
+        await deviceManager.reInitDevice("1_68");
+        await deviceManager.setDevicePolling("1_68", false, true);
+        await deviceManager.setTypePolicy("TrillRing", "disabledClaim", true);
+        await deviceManager.getTypeFileStatus();
+        await deviceManager.listDevices("system");
+        expect(sent).toEqual([
+            "devman/setname?deviceid=1_68&name=Arm%20IMU&save=1",
+            "devman/setrole?deviceid=1_68&role=system",
+            "devman/types?offset=10&count=5",
+            "devman/identinfo?deviceid=1_39",
+            "devman/reident?unidentified=1",
+            "devman/reident?type=VL6180",
+            "devman/reident?deviceid=1_229",
+            "devman/reinit?deviceid=1_68",
+            "devman/devenable?deviceid=1_68&poll=0&save=1",
+            "devman/typepolicy?type=TrillRing&policy=disabledClaim&save=1",
+            "devman/typefile",
+            "devman/listdevs?role=system",
+        ]);
+    });
+
+    test("return the firmware response", async () => {
+        const { deviceManager } = await makeManager({
+            "devman/types": { rslt: "ok", total: 53, generation: 1, types: [{ dtIdx: 0, key: "A", src: "base", policy: "enabled" }] },
+            "devman/reserved": { rslt: "ok", addrs: ["0x10", "0x68"] },
+        });
+        const types = await deviceManager.getDeviceTypes();
+        expect(types?.total).toBe(53);
+        expect(types?.types?.[0].key).toBe("A");
+        expect(await deviceManager.getReservedAddresses()).toEqual(["0x10", "0x68"]);
+        expect((await deviceManager.getIdentInfo("1_68"))?.rslt).toBe("fail");
+    });
+
+    test("display name", async () => {
+        const { deviceManager } = await makeManager({});
+        expect(deviceManager.getDeviceDisplayName("1_68", "Arm IMU")).toBe("Arm IMU");
+        expect(deviceManager.getDeviceDisplayName("1_68")).toBe("1_68");
+    });
+});

@@ -43,6 +43,50 @@ interface DeviceStatsInternal extends DeviceStats {
     windowEvents: Array<{ timeMs: number; samples: number }>;
 }
 
+export type DevManTypePolicy = "enabled" | "disabled" | "disabledClaim";
+
+export interface DevManListDevs {
+    devices?: Array<{ deviceid: string; name?: string; displayName?: string; role?: string; dtIdx?: number }>;
+}
+
+export interface DevManTypes {
+    total?: number;
+    generation?: number;
+    types?: Array<{ dtIdx: number; key: string; src: string; policy: DevManTypePolicy }>;
+}
+
+export interface DevManIdentInfo {
+    deviceID?: string;
+    ident?: {
+        online?: string;
+        state?: string;
+        attempts?: number;
+        nextInMs?: number;
+        dtIdx?: number;
+        polled?: boolean;
+        reverify?: boolean;
+        reident?: boolean;
+        candidates?: Array<{ dtIdx: number; key: string }>;
+        hook?: boolean;
+    };
+}
+
+export interface DevManDevEnable {
+    deviceID?: string;
+    poll?: boolean;
+    online?: boolean;
+    saved?: boolean;
+}
+
+export interface DevManTypeFileStatus {
+    file?: string;
+    state?: string;
+    present?: boolean;
+    crc?: string;
+    restartRequired?: boolean;
+    firstError?: string;
+}
+
 export class DeviceManager implements RaftDeviceMgrIF{
 
     // Max data points to store
@@ -1768,6 +1812,91 @@ export class DeviceManager implements RaftDeviceMgrIF{
         }
 
         this._decodedDataCallbacks.forEach((cb) => cb(decoded));
+    }
+
+    ////////////////////////////////////////////////////////////////////////////
+    // Device management (devman) endpoints - thin wrappers; each returns the firmware's response (rslt "ok" or
+    // "fail" with "error"), or undefined if there is no connection. deviceKey is the device ID (e.g. "1_68")
+    ////////////////////////////////////////////////////////////////////////////
+
+    private async devManCmd<T>(cmd: string): Promise<(RaftOKFail & T) | undefined> {
+        const msgHandler = this._systemUtils?.getMsgHandler();
+        if (!msgHandler) return undefined;
+        try {
+            return await msgHandler.sendRICRESTURL<RaftOKFail & T>(cmd);
+        } catch (error) {
+            console.warn(`DeviceManager ${cmd.split("?")[0]} error ${error}`);
+            return undefined;
+        }
+    }
+
+    // A device's display name: its name if it has one, otherwise its type's name and its device ID (as the firmware
+    // forms it in devman/listdevs displayName)
+    public getDeviceDisplayName(deviceKey: string, name?: string): string {
+        if (name) return name;
+        const typeName = this._devicesState[deviceKey]?.deviceTypeInfo?.name || this._devicesState[deviceKey]?.deviceType;
+        return typeName ? `${typeName} ${deviceKey}` : deviceKey;
+    }
+
+    // Devices (with name, displayName, role and device type index)
+    public async listDevices(role?: string): Promise<(RaftOKFail & DevManListDevs) | undefined> {
+        return this.devManCmd<DevManListDevs>(`devman/listdevs${role ? `?role=${encodeURIComponent(role)}` : ""}`);
+    }
+
+    // Set a device's name (save: keep it over a restart)
+    public async setDeviceName(deviceKey: string, name: string, save = false): Promise<(RaftOKFail) | undefined> {
+        return this.devManCmd<object>(`devman/setname?deviceid=${deviceKey}&name=${encodeURIComponent(name)}${save ? "&save=1" : ""}`);
+    }
+
+    // Set a device's role ("normal" for none; save: keep it over a restart)
+    public async setDeviceRole(deviceKey: string, role: string, save = false): Promise<(RaftOKFail) | undefined> {
+        return this.devManCmd<object>(`devman/setrole?deviceid=${deviceKey}&role=${encodeURIComponent(role)}${save ? "&save=1" : ""}`);
+    }
+
+    // The device type table, a page at a time
+    public async getDeviceTypes(offset = 0, count = 50): Promise<(RaftOKFail & DevManTypes) | undefined> {
+        return this.devManCmd<DevManTypes>(`devman/types?offset=${offset}&count=${count}`);
+    }
+
+    // A device's identification state (state, attempts, candidates in the order they are tried)
+    public async getIdentInfo(deviceKey: string): Promise<(RaftOKFail & DevManIdentInfo) | undefined> {
+        return this.devManCmd<DevManIdentInfo>(`devman/identinfo?deviceid=${deviceKey}`);
+    }
+
+    // Identify devices again: all, those not identified, one device, or those identified as a type
+    public async reIdentify(scope: { all?: boolean; unidentified?: boolean; deviceKey?: string; type?: string }): Promise<(RaftOKFail & { buses?: number }) | undefined> {
+        let args = "";
+        if (scope.all) args = "all=1";
+        else if (scope.unidentified) args = "unidentified=1";
+        else if (scope.type !== undefined) args = `type=${encodeURIComponent(scope.type)}`;
+        else if (scope.deviceKey) args = `deviceid=${scope.deviceKey}`;
+        return this.devManCmd<{ buses?: number }>(`devman/reident?${args}`);
+    }
+
+    // Run a device's initialisation again (its devconfig settings are then applied again)
+    public async reInitDevice(deviceKey: string): Promise<(RaftOKFail & { queued?: boolean }) | undefined> {
+        return this.devManCmd<{ queued?: boolean }>(`devman/reinit?deviceid=${deviceKey}`);
+    }
+
+    // Stop or resume polling a device (kept while it is offline; save: keep it over a restart)
+    public async setDevicePolling(deviceKey: string, enabled: boolean, save = false): Promise<(RaftOKFail & DevManDevEnable) | undefined> {
+        return this.devManCmd<DevManDevEnable>(`devman/devenable?deviceid=${deviceKey}&poll=${enabled ? 1 : 0}${save ? "&save=1" : ""}`);
+    }
+
+    // Set a device type's policy now (save: also in the device type file, applied by a restart)
+    public async setTypePolicy(type: string, policy: DevManTypePolicy, save = false): Promise<(RaftOKFail & { restartRequired?: boolean }) | undefined> {
+        return this.devManCmd<{ restartRequired?: boolean }>(`devman/typepolicy?type=${encodeURIComponent(type)}&policy=${policy}${save ? "&save=1" : ""}`);
+    }
+
+    // Device type file status (restartRequired: the file has changed since it was loaded)
+    public async getTypeFileStatus(): Promise<(RaftOKFail & DevManTypeFileStatus) | undefined> {
+        return this.devManCmd<DevManTypeFileStatus>("devman/typefile");
+    }
+
+    // Addresses device type records identify devices at
+    public async getReservedAddresses(): Promise<string[] | undefined> {
+        const rslt = await this.devManCmd<{ addrs?: string[] }>("devman/reserved");
+        return rslt?.rslt === "ok" ? rslt.addrs ?? [] : undefined;
     }
 
     private extractMarkers(attrGroups: any): Record<string, unknown> {
