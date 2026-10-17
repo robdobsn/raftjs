@@ -585,6 +585,11 @@ describe("DeviceManager devman wrappers", () => {
         await deviceManager.setTypePolicy("TrillRing", "disabledClaim", true);
         await deviceManager.getTypeFileStatus();
         await deviceManager.listDevices("system");
+        await deviceManager.getTypeFileStatus(true);
+        await deviceManager.checkTypeFile("/local/devlib.new.json");
+        await deviceManager.checkTypeFile();
+        await deviceManager.applyTypeFile("/local/devlib.new.json");
+        await deviceManager.applyTypeFile();
         expect(sent).toEqual([
             "devman/setname?deviceid=1_68&name=Arm%20IMU&save=1",
             "devman/setrole?deviceid=1_68&role=system",
@@ -598,6 +603,11 @@ describe("DeviceManager devman wrappers", () => {
             "devman/typepolicy?type=TrillRing&policy=disabledClaim&save=1",
             "devman/typefile",
             "devman/listdevs?role=system",
+            "devman/typefile?entries=1",
+            "devman/typefile/check?file=%2Flocal%2Fdevlib.new.json",
+            "devman/typefile/check",
+            "devman/typefile/apply?file=%2Flocal%2Fdevlib.new.json",
+            "devman/typefile/apply",
         ]);
     });
 

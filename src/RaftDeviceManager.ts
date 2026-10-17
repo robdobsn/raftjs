@@ -78,6 +78,14 @@ export interface DevManDevEnable {
     saved?: boolean;
 }
 
+export interface DevManTypeFileEntry {
+    key: string;
+    outcome: "added" | "replaced" | "unchanged" | "disabled" | "rejected";
+    error?: string;
+    warnings?: string;
+    noDecoder?: boolean;        // has data but no on-device decoder (raftjs decodes it; DataLogger, RaftROS don't)
+}
+
 export interface DevManTypeFileStatus {
     file?: string;
     state?: string;
@@ -85,6 +93,23 @@ export interface DevManTypeFileStatus {
     crc?: string;
     restartRequired?: boolean;
     firstError?: string;
+    entries?: DevManTypeFileEntry[];    // with getTypeFileStatus(true)
+}
+
+export interface DevManTypeFileCheck {
+    file?: string;
+    bytes?: number;
+    crc?: string;
+    valid?: boolean;            // nothing rejected
+    added?: number;
+    replaced?: number;
+    unchanged?: number;
+    disabled?: number;
+    rejected?: number;
+    warnings?: number;
+    firstError?: string;
+    firstWarning?: string;
+    entries?: DevManTypeFileEntry[];
 }
 
 export class DeviceManager implements RaftDeviceMgrIF{
@@ -1962,8 +1987,22 @@ export class DeviceManager implements RaftDeviceMgrIF{
     }
 
     // Device type file status (restartRequired: the file has changed since it was loaded)
-    public async getTypeFileStatus(): Promise<(RaftOKFail & DevManTypeFileStatus) | undefined> {
-        return this.devManCmd<DevManTypeFileStatus>("devman/typefile");
+    public async getTypeFileStatus(entries = false): Promise<(RaftOKFail & DevManTypeFileStatus) | undefined> {
+        return this.devManCmd<DevManTypeFileStatus>(`devman/typefile${entries ? "?entries=1" : ""}`);
+    }
+
+    // What a device type file on the device would do at the next startup, entry by entry, without changing anything
+    // (default: the device type file itself)
+    public async checkTypeFile(file?: string): Promise<(RaftOKFail & DevManTypeFileCheck) | undefined> {
+        return this.devManCmd<DevManTypeFileCheck>(`devman/typefile/check${file ? `?file=${encodeURIComponent(file)}` : ""}`);
+    }
+
+    // Restart the device to apply its device type file. With file (e.g. one just uploaded as /local/devlib.new.json),
+    // that file is checked first and becomes the device type file only if nothing in it is rejected (otherwise the
+    // response is rslt "fail", error "failCheck", with the check's fields)
+    public async applyTypeFile(file?: string): Promise<(RaftOKFail & DevManTypeFileCheck & { restarting?: boolean }) | undefined> {
+        return this.devManCmd<DevManTypeFileCheck & { restarting?: boolean }>(
+            `devman/typefile/apply${file ? `?file=${encodeURIComponent(file)}` : ""}`);
     }
 
     // Addresses device type records identify devices at

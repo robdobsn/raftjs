@@ -104,7 +104,9 @@ await devMan.getIdentInfo("1_68");                   // identification state and
 await devMan.reIdentify({ unidentified: true });     // or { all }, { deviceKey }, { type }
 await devMan.setTypePolicy("APDS9960", "disabled");  // save=true also writes the device type file
 await devMan.getDeviceTypes(0, 50);                  // the device type table
-await devMan.getTypeFileStatus();                    // restartRequired after a type file change
+await devMan.getTypeFileStatus(true);                // restartRequired after a type file change; entries
+await devMan.checkTypeFile("/local/devlib.new.json"); // what an uploaded type file would do, per entry
+await devMan.applyTypeFile("/local/devlib.new.json"); // check, use it as the type file and restart
 ```
 
 `addDeviceNameChangedCallback()` reports when a device's name or display name changes.
