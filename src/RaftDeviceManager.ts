@@ -117,6 +117,7 @@ export class DeviceManager implements RaftDeviceMgrIF{
     private _newAttributeDataCallbacks: Array<(deviceKey: string, attrState: DeviceAttributeState) => void> = [];
     private _decodedDataCallbacks: Array<(decoded: DeviceDecodedData) => void> = [];
     private _deviceRemovedCallbacks: Array<(deviceKey: string, state: DeviceState) => void> = [];
+    private _deviceNameChangedCallbacks: Array<(deviceKey: string, state: DeviceState) => void> = [];
 
     // Debug message index (to help debug with async messages)
     private _debugMsgIndex = 0;
@@ -154,7 +155,7 @@ export class DeviceManager implements RaftDeviceMgrIF{
 
     // Per device ID: instance data (name, role) from the per-device typeinfo request. It belongs to the
     // device's location, not its type, so it is kept when the device changes type
-    private _deviceInstanceData: { [deviceKey: string]: { name?: string; role?: string } } = {};
+    private _deviceInstanceData: { [deviceKey: string]: { name?: string; role?: string; displayName?: string } } = {};
 
     // Incremented when the type caches are cleared, so a request started before then doesn't refill them
     private _typeCacheGeneration = 0;
@@ -316,6 +317,18 @@ export class DeviceManager implements RaftDeviceMgrIF{
 
     public removeDecodedDataCallback(callback: (decoded: DeviceDecodedData) => void): void {
         this._decodedDataCallbacks = this._decodedDataCallbacks.filter((cb) => cb !== callback);
+    }
+
+    // Called when the device name or display name of a known device changes (e.g. after setDeviceName, or when
+    // the device is identified again as another type)
+    public addDeviceNameChangedCallback(callback: (deviceKey: string, state: DeviceState) => void): void {
+        if (!this._deviceNameChangedCallbacks.includes(callback)) {
+            this._deviceNameChangedCallbacks.push(callback);
+        }
+    }
+
+    public removeDeviceNameChangedCallback(callback: (deviceKey: string, state: DeviceState) => void): void {
+        this._deviceNameChangedCallbacks = this._deviceNameChangedCallbacks.filter((cb) => cb !== callback);
     }
 
     public addDeviceRemovedCallback(callback: (deviceKey: string, state: DeviceState) => void): void {
@@ -603,6 +616,7 @@ export class DeviceManager implements RaftDeviceMgrIF{
                         this._devicesState[deviceKey].deviceType = deviceTypeInfo.name || "";
                         this._devicesState[deviceKey].busName = busNum.toString();
                         this._devicesState[deviceKey].deviceAddress = devAddrHex;
+                        this.updateIdentityFields(deviceKey, busNum, true);
                     }
                 } else {
                     // Create device record - device type info may be undefined
@@ -627,6 +641,7 @@ export class DeviceManager implements RaftDeviceMgrIF{
                         deviceType: deviceTypeInfo?.name || "",
                         busName: busNum.toString()
                     };
+                    this.updateIdentityFields(deviceKey, busNum, false);
                 }
             }
 
@@ -876,6 +891,7 @@ export class DeviceManager implements RaftDeviceMgrIF{
                     this._devicesState[deviceKey].deviceType = deviceTypeKeyOrIndex;
                     this._devicesState[deviceKey].deviceAddress = devAddr;
                     this._devicesState[deviceKey].busName = busName;
+                    this.updateIdentityFields(deviceKey, this.busNumFromStr(busName), true);
                 }
             } else {
                 // Create device record - device type info may be undefined
@@ -900,6 +916,7 @@ export class DeviceManager implements RaftDeviceMgrIF{
                     deviceType: deviceTypeKeyOrIndex,
                     busName: busName
                 };
+                this.updateIdentityFields(deviceKey, this.busNumFromStr(busName), false);
             }
         }
 
@@ -1156,13 +1173,15 @@ export class DeviceManager implements RaftDeviceMgrIF{
                     // the bus/type-index lookup instead of caching an empty record.
                     // Instance data (name, role) belongs to the device ID, whatever its type
                     if ((deviceType === undefined) && (generation === this._typeCacheGeneration)) {
-                        this._deviceInstanceData[deviceKeyOrBusName] = { name: msgRslt.name, role: msgRslt.role };
+                        this._deviceInstanceData[deviceKeyOrBusName] = { name: msgRslt.name, role: msgRslt.role, displayName: msgRslt.displayName };
                     }
                     if (!msgRslt.devinfo) {
                         return undefined;
                     }
                     // Merge devinfo (type-level) with top-level per-instance overrides (name, role)
                     const base: DeviceTypeInfo = { ...msgRslt.devinfo };
+                    base.typeDisplayName = msgRslt.devinfo.name;
+                    base.deviceTypeKey = msgRslt.deviceTypeKey ?? msgRslt.devinfo.type;
                     if (msgRslt.name !== undefined) base.name = msgRslt.name;
                     if (msgRslt.role !== undefined) base.role = msgRslt.role;
                     // A request started before the caches were cleared (e.g. before a reboot) may be for a
@@ -1830,12 +1849,60 @@ export class DeviceManager implements RaftDeviceMgrIF{
         }
     }
 
-    // A device's display name: its name if it has one, otherwise its type's name and its device ID (as the firmware
-    // forms it in devman/listdevs displayName)
+    // A device's display name: its device name if it has one, otherwise its type display name and its device ID
+    // (the firmware's displayName where it gives one; the same rule otherwise). name overrides the device name
     public getDeviceDisplayName(deviceKey: string, name?: string): string {
         if (name) return name;
-        const typeName = this._devicesState[deviceKey]?.deviceTypeInfo?.name || this._devicesState[deviceKey]?.deviceType;
+        const instanceData = this._deviceInstanceData[deviceKey];
+        if (instanceData?.name) return instanceData.name;
+        if (instanceData?.displayName) return instanceData.displayName;
+        const typeInfo = this._devicesState[deviceKey]?.deviceTypeInfo;
+        const typeName = typeInfo?.typeDisplayName || typeInfo?.deviceTypeKey;
         return typeName ? `${typeName} ${deviceKey}` : deviceKey;
+    }
+
+    // Set the identity fields of a device's state (displayName, deviceName, deviceTypeKey, busNum) from its type
+    // data and instance data. For a known device a change of name is reported to the name changed callbacks
+    private updateIdentityFields(deviceKey: string, busNum: number | undefined, notify: boolean): void {
+        const state = this._devicesState[deviceKey];
+        if (!state) return;
+        const prevDisplayName = state.displayName;
+        const prevDeviceName = state.deviceName;
+        state.busNum = busNum;
+        state.deviceTypeKey = state.deviceTypeInfo?.deviceTypeKey ?? state.deviceTypeInfo?.type;
+        state.deviceName = this._deviceInstanceData[deviceKey]?.name ?? "";
+        state.displayName = this.getDeviceDisplayName(deviceKey);
+        if (notify && ((prevDisplayName !== state.displayName) || (prevDeviceName !== state.deviceName))) {
+            this._deviceNameChangedCallbacks.forEach((cb) => cb(deviceKey, state));
+        }
+    }
+
+    private busNumFromStr(busStr: string): number | undefined {
+        return /^\d+$/.test(busStr) ? parseInt(busStr, 10) : undefined;
+    }
+
+    // Apply a device name or role set from here to the cached data and the device's state, so it is seen without
+    // waiting for the type data to be requested again
+    private applyInstanceChange(deviceKey: string, change: { name?: string; role?: string }): void {
+        const instanceData = this._deviceInstanceData[deviceKey] ?? {};
+        if (change.name !== undefined) {
+            instanceData.name = change.name;
+            instanceData.displayName = change.name;
+        }
+        if ("role" in change) instanceData.role = change.role;
+        this._deviceInstanceData[deviceKey] = instanceData;
+        const cached = this._cachedDeviceTypeRecs[deviceKey];
+        if (cached) {
+            this._cachedDeviceTypeRecs[deviceKey] = { ...cached, ...change };
+        }
+        const state = this._devicesState[deviceKey];
+        if (state?.deviceTypeInfo) {
+            // The deprecated fields keep their meaning: the device name replaces the type display name
+            const prevName = state.deviceTypeInfo.name;
+            state.deviceTypeInfo = { ...state.deviceTypeInfo, ...change };
+            if ((change.name !== undefined) && (state.deviceType === prevName)) state.deviceType = change.name;
+        }
+        if (state) this.updateIdentityFields(deviceKey, state.busNum, true);
     }
 
     // Devices (with name, displayName, role and device type index)
@@ -1845,12 +1912,18 @@ export class DeviceManager implements RaftDeviceMgrIF{
 
     // Set a device's name (save: keep it over a restart)
     public async setDeviceName(deviceKey: string, name: string, save = false): Promise<(RaftOKFail) | undefined> {
-        return this.devManCmd<object>(`devman/setname?deviceid=${deviceKey}&name=${encodeURIComponent(name)}${save ? "&save=1" : ""}`);
+        const rslt = await this.devManCmd<object>(`devman/setname?deviceid=${deviceKey}&name=${encodeURIComponent(name)}${save ? "&save=1" : ""}`);
+        if (rslt?.rslt === "ok") this.applyInstanceChange(deviceKey, { name });
+        return rslt;
     }
 
     // Set a device's role ("normal" for none; save: keep it over a restart)
     public async setDeviceRole(deviceKey: string, role: string, save = false): Promise<(RaftOKFail) | undefined> {
-        return this.devManCmd<object>(`devman/setrole?deviceid=${deviceKey}&role=${encodeURIComponent(role)}${save ? "&save=1" : ""}`);
+        const rslt = await this.devManCmd<object>(`devman/setrole?deviceid=${deviceKey}&role=${encodeURIComponent(role)}${save ? "&save=1" : ""}`);
+        // The firmware reports no role for "normal" (the default)
+        const roleSet = ((role === "") || (role.toLowerCase() === "normal")) ? undefined : role;
+        if (rslt?.rslt === "ok") this.applyInstanceChange(deviceKey, { role: roleSet });
+        return rslt;
     }
 
     // The device type table, a page at a time

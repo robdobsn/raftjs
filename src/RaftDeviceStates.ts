@@ -122,8 +122,25 @@ export interface DeviceState {
     stateChanged: boolean;
     onlineState: DeviceOnlineState;
     deviceAddress: string;
+    /**
+     * @deprecated Holds the type display name or the device name (devbin), or the device type index (devjson) -
+     * use deviceTypeKey, displayName or deviceName. Kept with its current meaning until a major version
+     */
     deviceType: string;
+    /**
+     * @deprecated Holds the bus number as a string - use busNum. Kept with its current meaning until a major
+     * version
+     */
     busName: string;
+    /** The name to show for the device: its device name if it has one, otherwise its type display name and its
+     * device ID (from the firmware's displayName, or derived the same way for older firmware) */
+    displayName?: string;
+    /** The device name (assigned with devman/setname), or "" if it has none */
+    deviceName?: string;
+    /** The device type key (e.g. "MPU6050") */
+    deviceTypeKey?: string;
+    /** The bus number (0 for a directly connected device) */
+    busNum?: number;
 }
 
 export class DevicesState {

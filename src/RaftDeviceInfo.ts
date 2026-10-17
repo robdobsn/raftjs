@@ -166,7 +166,15 @@ export interface DeviceTypeAction {
 }
 
 export interface DeviceTypeInfo {
+    /**
+     * @deprecated The type display name, or the device name if one is assigned (it overwrites it) - use
+     * typeDisplayName, or DeviceState.displayName / deviceName. Kept with its current meaning until a major version
+     */
     name: string;
+    /** The type display name (devInfoJson.name), never replaced by the device name */
+    typeDisplayName?: string;
+    /** The device type key (from the firmware's deviceTypeKey, or devInfoJson.type for older firmware) */
+    deviceTypeKey?: string;
     desc: string;
     manu: string;
     type: string;
@@ -186,6 +194,7 @@ export type RaftDevTypeInfoResponse = {
     devinfo?: DeviceTypeInfo;
     dtIdx?: number;
     deviceTypeKey?: string;     // device type key of the record (firmware from 2026-10-15)
+    displayName?: string;       // name to show for the device (per-device lookup, firmware from 2026-10-16)
     name?: string;
     role?: string;
   };

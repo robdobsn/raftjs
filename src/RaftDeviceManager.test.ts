@@ -619,3 +619,100 @@ describe("DeviceManager devman wrappers", () => {
         expect(deviceManager.getDeviceDisplayName("1_68")).toBe("1_68");
     });
 });
+
+describe("DeviceManager identity fields (displayName, deviceName, deviceTypeKey, busNum)", () => {
+    const imuInfo: DeviceTypeInfo = { ...makeTypeInfo("Accelerometer", 2, [{ n: "v", t: ">H" }]), type: "MPU6050" };
+    const sample = (ts: number) => [...u16(ts), 0x12, 0x34];
+
+    // Firmware stand-in. newFirmware adds deviceTypeKey and displayName to typeinfo responses (as firmware from
+    // 2026-10-16 does); older firmware has neither
+    function makeManager(newFirmware: boolean, perDevice: Record<string, { name?: string }>) {
+        const msgHandler = {
+            sendRICRESTURL: jest.fn(async (cmd: string) => {
+                const params = new URLSearchParams(cmd.split("?")[1]);
+                const deviceId = params.get("deviceid");
+                if (cmd.startsWith("devman/setname") || cmd.startsWith("devman/setrole")) {
+                    return { rslt: "ok" };
+                }
+                const extra = newFirmware ? { deviceTypeKey: "MPU6050K" } : {};
+                if (deviceId !== null) {
+                    const dev = perDevice[deviceId] ?? {};
+                    const displayName = dev.name ?? `Accelerometer ${deviceId}`;
+                    return { rslt: "ok", devinfo: imuInfo, name: dev.name, ...extra, ...(newFirmware ? { displayName } : {}) };
+                }
+                return params.get("type") === "4" ? { rslt: "ok", devinfo: imuInfo, ...extra } : { rslt: "fail" };
+            })
+        };
+        const systemUtils = {
+            getMsgHandler: () => msgHandler,
+            getPublishTopicName: () => "devbin"
+        } as unknown as RaftSystemUtils;
+        const deviceManager = new DeviceManager();
+        return { deviceManager, ready: deviceManager.setup(systemUtils) };
+    }
+
+    it("sets the new fields from current firmware, and keeps the old fields' meaning", async () => {
+        const { deviceManager, ready } = makeManager(true, { "1_68": { name: "Arm IMU" } });
+        await ready;
+        await deviceManager.handleClientMsgBinary(devbinFrame([devbinRecord(0x81, 0x68, 4, 1, [sample(10)])]));
+        const state = deviceManager.getDeviceState("1_68");
+        expect(state.displayName).toBe("Arm IMU");
+        expect(state.deviceName).toBe("Arm IMU");
+        expect(state.deviceTypeKey).toBe("MPU6050K");
+        expect(state.busNum).toBe(1);
+        expect(state.deviceTypeInfo?.typeDisplayName).toBe("Accelerometer");
+        // Deprecated fields unchanged
+        expect(state.deviceTypeInfo?.name).toBe("Arm IMU");
+        expect(state.deviceType).toBe("Arm IMU");
+        expect(state.busName).toBe("1");
+    });
+
+    it("derives the fields for older firmware (no displayName or deviceTypeKey)", async () => {
+        const { deviceManager, ready } = makeManager(false, {});
+        await ready;
+        await deviceManager.handleClientMsgBinary(devbinFrame([devbinRecord(0x81, 0x68, 4, 1, [sample(10)])]));
+        const state = deviceManager.getDeviceState("1_68");
+        expect(state.displayName).toBe("Accelerometer 1_68");
+        expect(state.deviceName).toBe("");
+        expect(state.deviceTypeKey).toBe("MPU6050");
+        expect(state.deviceTypeInfo?.name).toBe("Accelerometer");
+        expect(state.deviceType).toBe("Accelerometer");
+    });
+
+    it("sets busNum for devjson devices", async () => {
+        const { deviceManager, ready } = makeManager(true, {});
+        await ready;
+        await deviceManager.handleClientMsgJson(JSON.stringify({ "1": { "68": { "_i": 4, "_o": 1, "0": "000a1234" } } }));
+        const state = deviceManager.getDeviceState("1_68");
+        expect(state.busNum).toBe(1);
+        expect(state.displayName).toBe("Accelerometer 1_68");
+        expect(state.busName).toBe("1");
+    });
+
+    it("sees a name set with setDeviceName at once, and reports it", async () => {
+        const { deviceManager, ready } = makeManager(true, {});
+        await ready;
+        await deviceManager.handleClientMsgBinary(devbinFrame([devbinRecord(0x81, 0x68, 4, 1, [sample(10)])]));
+        const changed: string[] = [];
+        deviceManager.addDeviceNameChangedCallback((deviceKey, state) => changed.push(`${deviceKey}=${state.displayName}`));
+
+        expect((await deviceManager.setDeviceName("1_68", "Arm IMU"))?.rslt).toBe("ok");
+        const state = deviceManager.getDeviceState("1_68");
+        expect(state.displayName).toBe("Arm IMU");
+        expect(state.deviceName).toBe("Arm IMU");
+        expect(state.deviceTypeInfo?.name).toBe("Arm IMU");
+        expect(state.deviceTypeInfo?.typeDisplayName).toBe("Accelerometer");
+        expect(state.deviceType).toBe("Arm IMU");
+        expect(changed).toEqual(["1_68=Arm IMU"]);
+
+        // A later record keeps the name (no stale cached type data)
+        await deviceManager.handleClientMsgBinary(devbinFrame([devbinRecord(0x81, 0x68, 4, 2, [sample(20)])]));
+        expect(deviceManager.getDeviceState("1_68").displayName).toBe("Arm IMU");
+
+        // Role: "normal" clears it
+        await deviceManager.setDeviceRole("1_68", "system");
+        expect(deviceManager.getDeviceState("1_68").deviceTypeInfo?.role).toBe("system");
+        await deviceManager.setDeviceRole("1_68", "normal");
+        expect(deviceManager.getDeviceState("1_68").deviceTypeInfo?.role).toBeUndefined();
+    });
+});

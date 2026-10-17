@@ -161,7 +161,7 @@ const DevicePanel = ({ deviceKey, lastUpdated }: DevicePanelProps) => {
         document.body.removeChild(textArea);
     };
 
-    let headerText = `Device ${deviceState?.deviceTypeInfo?.name}`;
+    let headerText = `Device ${deviceState?.displayName ?? deviceState?.deviceTypeInfo?.name}`;
     let bracketsAdded = false;
     if ((deviceState?.busName !== undefined) && (deviceState?.busName !== "") && (deviceState?.busName !== "0")) {
         headerText += ` (Bus ${deviceState?.busName}`;
