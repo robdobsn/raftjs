@@ -10,11 +10,11 @@
 import { DeviceAttributeState, DeviceAttributesState, DevicesState, DeviceState, DeviceStats, DeviceOnlineState, formatDeviceAddrHex, getDeviceKey, parseDeviceKey } from "./RaftDeviceStates";
 import { DeviceMsgJson, DeviceMsgJsonElem } from "./RaftDeviceMsg";
 import { RaftOKFail } from './RaftTypes';
-import { DeviceTypeInfo, DeviceTypeAction, DeviceTypeInfoRecs, DeviceTypePollRespMetadata, RaftDevTypeInfoResponse, SampleRateResult, getActionMapHex } from "./RaftDeviceInfo";
+import { DeviceTypeInfo, DeviceTypeAction, DeviceTypeInfoRecs, DeviceTypePollRespMetadata, RaftDevTypeInfoResponse, SampleRateResult, getActionMapHex, encodeActionWrite } from "./RaftDeviceInfo";
 import AttributeHandler from "./RaftAttributeHandler";
 import RaftSystemUtils from "./RaftSystemUtils";
 import RaftDeviceMgrIF from "./RaftDeviceMgrIF";
-import { structPack, structSizeOf } from "./RaftStruct";
+import { structSizeOf } from "./RaftStruct";
 // import RaftUtils from "./RaftUtils";
 
 // Devbin record payload formats. See devdocs/devbin-protocol-versioning.md
@@ -1413,12 +1413,6 @@ export class DeviceManager implements RaftDeviceMgrIF{
     // Send action to device
     ////////////////////////////////////////////////////////////////////////////
 
-    private toHex(data: Uint8Array): string {
-        return Array.from(data)
-            .map(byte => byte.toString(16).padStart(2, "0"))
-            .join("");
-    }
-
     ////////////////////////////////////////////////////////////////////////////
     // Raw I2C write + read via devman/cmdraw (requires firmware with rdData support)
     ////////////////////////////////////////////////////////////////////////////
@@ -1481,37 +1475,13 @@ export class DeviceManager implements RaftDeviceMgrIF{
                 return false;
             }
         } else {
-            let writeBytes: Uint8Array;
-
-            // Check for one data item
-            if (data.length === 1) {
-
-                let value = data[0];
-
-                // Check for conversion
-                if (action.sub !== undefined) {
-                    value = value - action.sub;
-                }
-                if (action.mul !== undefined) {
-                    value = value * action.mul;
-                }
-
-                // Form the write bytes
-                writeBytes = action.t ? structPack(action.t, [value]) : new Uint8Array(0);
-
-            } else
-            {
-
-                // Form the write bytes which may have multiple data items
-                writeBytes = action.t ? structPack(action.t, data) : new Uint8Array(0);
+            const encoded = encodeActionWrite(action, data);
+            if (encoded === null) {
+                console.warn(`DeviceManager sendAction: can't encode ${data} for action ${action.n}`);
+                return false;
             }
-
-            // Convert to hex string
-            writeHexStr = this.toHex(writeBytes);
+            writeHexStr = encoded;
         }
-
-        // Add prefix and postfix
-        writeHexStr = (action.w ? action.w : "") + writeHexStr + (action.wz ? action.wz : "");
 
         // Parse the device key into bus and address components
         const { bus: devBus, addr: devAddr } = this.parseDeviceKeyForCommand(deviceKey);

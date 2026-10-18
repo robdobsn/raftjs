@@ -7,6 +7,8 @@
 //
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+import { structPack } from "./RaftStruct";
+
 const attrTypeBits: { [key: string]: number } = {
     "c": 8, "b": 8, "B": 8, "?": 8,
     "h": 16, "H": 16, ">h": 16, "<h": 16, ">H": 16, "<H": 16,
@@ -147,11 +149,59 @@ export function getActionMapEntry(entry: ActionMapValue): ActionMapEntry | null 
     return typeof entry === 'object' ? entry : null;
 }
 
+/** Sensirion CRC-8 (polynomial 0x31, initial value 0xFF) of a 2-byte word */
+export function sensirionCrc8(msb: number, lsb: number): number {
+    let crc = 0xff;
+    for (const byte of [msb, lsb]) {
+        crc ^= byte;
+        for (let bit = 0; bit < 8; bit++) {
+            crc = (crc & 0x80) ? ((crc << 1) ^ 0x31) & 0xff : (crc << 1) & 0xff;
+        }
+    }
+    return crc;
+}
+
+/**
+ * The hex bytes an action writes for the given data (an action without a map): the value(s) after sub and mul,
+ * packed with t, then crc check bytes if the action has them, between the w prefix and the wz suffix.
+ * Returns null if the data can't be encoded (crc8w needs whole 2-byte words)
+ */
+export function encodeActionWrite(action: DeviceTypeAction, data: number[]): string | null {
+    let writeBytes: Uint8Array;
+    if (data.length === 1) {
+        let value = data[0];
+        if (action.sub !== undefined) {
+            value = value - action.sub;
+        }
+        if (action.mul !== undefined) {
+            value = value * action.mul;
+        }
+        writeBytes = action.t ? structPack(action.t, [value]) : new Uint8Array(0);
+    } else {
+        writeBytes = action.t ? structPack(action.t, data) : new Uint8Array(0);
+    }
+    if (action.crc === "crc8w") {
+        if (writeBytes.length % 2 !== 0) {
+            return null;
+        }
+        const withCrc: number[] = [];
+        for (let i = 0; i < writeBytes.length; i += 2) {
+            withCrc.push(writeBytes[i], writeBytes[i + 1], sensirionCrc8(writeBytes[i], writeBytes[i + 1]));
+        }
+        writeBytes = new Uint8Array(withCrc);
+    } else if (action.crc !== undefined) {
+        return null;
+    }
+    const hex = Array.from(writeBytes).map((b) => b.toString(16).padStart(2, "0")).join("");
+    return (action.w ? action.w : "") + hex + (action.wz ? action.wz : "");
+}
+
 export interface DeviceTypeAction {
     n: string;                      // Action name
     t?: string;                     // Action type using python struct module format (e.g. 'H' for unsigned short, 'h' for signed short, 'f' for float etc.)
     w: string;                      // Prefix to write to cmd API
     wz?: string;                    // Postfix to write to cmd API
+    crc?: string;                   // Check bytes added to the encoded value: "crc8w" - a Sensirion CRC-8 after each 2-byte word
     r?: number[];                   // Range of valid values for the action
     f?: string;                     // Custom formatting options (e.g. LEDPIX for LED pixel grid)
     NX?: number;                    // Number of X in the LED pixel grid
