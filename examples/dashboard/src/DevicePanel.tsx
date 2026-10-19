@@ -161,7 +161,13 @@ const DevicePanel = ({ deviceKey, lastUpdated }: DevicePanelProps) => {
         document.body.removeChild(textArea);
     };
 
-    let headerText = `Device ${deviceState?.displayName ?? deviceState?.deviceTypeInfo?.name}`;
+    const deviceName = deviceState?.displayName ?? deviceState?.deviceTypeInfo?.name ?? "";
+    let headerText = `Device ${deviceName}`;
+    // Add the device type (e.g. SCD30 or STCC4) so devices with the same type display name can be told apart
+    const deviceType = deviceState?.deviceTypeInfo?.type;
+    if (deviceType && !deviceName.includes(deviceType)) {
+        headerText += ` ${deviceType}`;
+    }
     let bracketsAdded = false;
     if ((deviceState?.busName !== undefined) && (deviceState?.busName !== "") && (deviceState?.busName !== "0")) {
         headerText += ` (Bus ${deviceState?.busName}`;

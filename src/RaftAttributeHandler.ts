@@ -190,7 +190,7 @@ export default class AttributeHandler {
                     visibleForm: hiddenAll ? false : ("vf" in attrDef ? (attrDef.vf === 0 || attrDef.vf === false ? false : !!attrDef.vf) : true),
                     elemsPerSample: elemsPerSample[attrIdx],
                     elemLabels: attrDef.el,
-                    elemUnits: attrDef.eu,
+                    elemUnits: attrDef.eu !== undefined ? decodeAttrUnitsEncoding(attrDef.eu) : undefined,
                     visualGroup: attrDef.vg,
                 };
             }

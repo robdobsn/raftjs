@@ -115,7 +115,8 @@ const DeviceLineChart: React.FC<DeviceLineChartProps> = memo(({ deviceKey, lastU
                 return true;
             })
             .map(([attributeName, attributeDetails]) => {
-                const data = attributeDetails.values.slice(-maxChartDataPoints);
+                // Any non-numeric value is shown as a gap
+                const data = attributeDetails.values.slice(-maxChartDataPoints).map(v => typeof v === 'number' ? v : NaN);
                 let colour = colourMapRef.current[attributeName];
                 if (!colour) {
                     colour = `hsl(${Math.random() * 360}, 70%, 60%)`;

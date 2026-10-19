@@ -17,14 +17,19 @@ class SettingsManager {
   private constructor() {
     // Load settings from localStorage or use default values
     const savedSettings = localStorage.getItem(this.storageKey);
-    this.settings = savedSettings
-      ? JSON.parse(savedSettings)
-      : {
-          latencyTest: false,
-          showCharts: true,
-          maxChartDataPoints: this.maxChartDataPoints_default,
-          maxDatapointsToStore: this.maxDatapointsToStore_default,
-        };
+    // Saved settings are merged over the defaults so settings added since they were saved get a value
+    this.settings = { ...this.defaultSettings(), ...(savedSettings ? JSON.parse(savedSettings) : {}) };
+  }
+
+  private defaultSettings(): Settings {
+    return {
+      latencyTest: false,
+      showCharts: true,
+      maxChartDataPoints: this.maxChartDataPoints_default,
+      maxDatapointsToStore: this.maxDatapointsToStore_default,
+      latencyAttributeName: "amb0",
+      latencyChangeThreshold: 100,
+    };
   }
 
   static getInstance(): SettingsManager {
@@ -54,12 +59,7 @@ class SettingsManager {
 
   // Reset to default settings
   resetSettings(): void {
-    this.settings = {
-      latencyTest: false,
-      showCharts: true,
-      maxChartDataPoints: this.maxChartDataPoints_default,
-      maxDatapointsToStore: this.maxDatapointsToStore_default,
-    };
+    this.settings = this.defaultSettings();
     this.saveSettings();
   }
 }

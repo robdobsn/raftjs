@@ -71,11 +71,25 @@ export function getAttrElemsPerSample(attrType: string): number {
     return total > 0 ? total : 1;
 }
 
+const UNITS_NAMED_ENTITIES: Record<string, string> = {
+    deg: "°", micro: "µ", ohm: "Ω", Omega: "Ω", omega: "ω",
+    Alpha: "Α", alpha: "α", Beta: "Β", beta: "β", Gamma: "Γ", gamma: "γ",
+    Delta: "Δ", delta: "δ", epsilon: "ε", theta: "θ", lambda: "λ", mu: "μ",
+    pi: "π", rho: "ρ", Sigma: "Σ", sigma: "σ", tau: "τ", phi: "φ", Phi: "Φ",
+    plusmn: "±", times: "×", divide: "÷", middot: "·", permil: "‰",
+    sup1: "¹", sup2: "²", sup3: "³", frac12: "½", frac14: "¼", frac34: "¾",
+    percnt: "%", sol: "/", amp: "&", lt: "<", gt: ">", quot: "\"", apos: "'", nbsp: "\u00a0",
+};
+
 export function decodeAttrUnitsEncoding(unitsEncoding: string): string {
-    // Replace instances of HTML encoded chars like &deg; with the actual char
-    return unitsEncoding
-        .replace(/&deg;/g, "°")
-        .replace(/&micro;/g, "µ");
+    // Replace HTML encoded chars like &deg;, &Omega;, &#937; or &#x3A9; with the actual char
+    return unitsEncoding.replace(/&(#[xX][0-9a-fA-F]+|#[0-9]+|[A-Za-z][A-Za-z0-9]*);/g, (match, ent: string) => {
+        if (ent[0] === "#") {
+            const code = (ent[1] === "x" || ent[1] === "X") ? parseInt(ent.slice(2), 16) : parseInt(ent.slice(1), 10);
+            return Number.isFinite(code) && code > 0 && code <= 0x10FFFF ? String.fromCodePoint(code) : match;
+        }
+        return UNITS_NAMED_ENTITIES[ent] ?? match;
+    });
 }
 
 export interface LUTRow {
