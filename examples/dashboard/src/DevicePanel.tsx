@@ -36,6 +36,22 @@ const DevicePanel = ({ deviceKey, lastUpdated }: DevicePanelProps) => {
     const [showCharts, setShowCharts] = useState(
        settingsManager.getSetting('showCharts')
     );
+
+    // Combine the timeline charts into one, rather than splitting them by units - remembered per device type
+    const chartTypeKey = deviceState?.deviceTypeInfo?.type ?? deviceState?.deviceTypeInfo?.name ?? deviceKey;
+    const [combineCharts, setCombineCharts] = useState<boolean>(
+        settingsManager.getSetting('combinedChartTypes').includes(chartTypeKey)
+    );
+    useEffect(() => {
+        setCombineCharts(settingsManager.getSetting('combinedChartTypes').includes(chartTypeKey));
+    }, [chartTypeKey]);
+    const handleCombineChartsChange = (combine: boolean) => {
+        const types = settingsManager.getSetting('combinedChartTypes').filter((t) => t !== chartTypeKey);
+        settingsManager.setSetting('combinedChartTypes', combine ? [...types, chartTypeKey] : types);
+        setCombineCharts(combine);
+    };
+    // The option is only offered when the charts would otherwise be split
+    const chartsWouldSplit = deviceState ? computeTimelineChartGroups(deviceState).length > 1 : false;
     
     useEffect(() => {
         const updateChart = () => {
@@ -217,6 +233,18 @@ const DevicePanel = ({ deviceKey, lastUpdated }: DevicePanelProps) => {
                                 <span>Show Stats</span>
                             </label>
                         </div>
+                        {(chartsWouldSplit || combineCharts) && (
+                            <div className="menu-item always-enabled menu-item-toggle">
+                                <label className="menu-toggle">
+                                    <input
+                                        type="checkbox"
+                                        checked={combineCharts}
+                                        onChange={(e) => handleCombineChartsChange(e.target.checked)}
+                                    />
+                                    <span>Combine Charts</span>
+                                </label>
+                            </div>
+                        )}
                     </div>
                 )}
             </div>
@@ -263,7 +291,7 @@ const DevicePanel = ({ deviceKey, lastUpdated }: DevicePanelProps) => {
                             const Viz = pv.entry.component;
                             return <Viz key={pv.key} deviceKey={deviceKey} attribute={pv.attribute} action={pv.action} lastUpdated={timedChartUpdate} />;
                         })}
-                        {(deviceState ? computeTimelineChartGroups(deviceState) : []).map((group) => (
+                        {(deviceState ? computeTimelineChartGroups(deviceState, combineCharts) : []).map((group) => (
                             <DeviceLineChart key={group.id} deviceKey={deviceKey} lastUpdated={timedChartUpdate} attrNames={group.attrNames} />
                         ))}
                     </div>

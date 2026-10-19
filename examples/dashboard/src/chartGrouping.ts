@@ -3,7 +3,8 @@
 // chartGrouping
 // Splits a device's timeline-chartable attributes into chart groups. Attributes with an
 // explicit visual group (schema vg field) always group together; otherwise, when a device
-// has many traces, attributes are auto-grouped by their value units.
+// has many traces, attributes are auto-grouped by their value units. A device can be shown on one chart
+// regardless (combine - the per-device-type choice in the device panel's menu).
 //
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -17,7 +18,7 @@ export interface TimelineChartGroup {
     attrNames: string[];
 }
 
-export function computeTimelineChartGroups(deviceState: DeviceState): TimelineChartGroup[] {
+export function computeTimelineChartGroups(deviceState: DeviceState, combine: boolean = false): TimelineChartGroup[] {
     // Attributes eligible for timeline charting (mirrors DeviceLineChart's filter)
     const eligible = Object.entries(deviceState.deviceAttributes)
         .filter(([, attr]) => {
@@ -28,7 +29,7 @@ export function computeTimelineChartGroups(deviceState: DeviceState): TimelineCh
         });
 
     const anyExplicitGroups = eligible.some(([, attr]) => attr.visualGroup);
-    if (!anyExplicitGroups && eligible.length <= MAX_TRACES_ON_SINGLE_CHART) {
+    if (combine || (!anyExplicitGroups && eligible.length <= MAX_TRACES_ON_SINGLE_CHART)) {
         return [{ id: 'all', attrNames: eligible.map(([name]) => name) }];
     }
 

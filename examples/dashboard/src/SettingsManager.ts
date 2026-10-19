@@ -5,6 +5,9 @@ export type Settings = {
   latencyTest: boolean;
   latencyAttributeName: string;
   latencyChangeThreshold: number;
+  // Device types whose timeline charts are combined into one chart rather than split by units (keyed by
+  // device type, e.g. "RoboAxiomPowerV1", so the choice follows the type wherever the device is attached)
+  combinedChartTypes: string[];
 };
 
 class SettingsManager {
@@ -29,6 +32,7 @@ class SettingsManager {
       maxDatapointsToStore: this.maxDatapointsToStore_default,
       latencyAttributeName: "amb0",
       latencyChangeThreshold: 100,
+      combinedChartTypes: [],
     };
   }
 
