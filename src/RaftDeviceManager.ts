@@ -84,6 +84,7 @@ export interface DevManTypeFileEntry {
     error?: string;
     warnings?: string;
     noDecoder?: boolean;        // has data but no on-device decoder (raftjs decodes it; DataLogger, RaftROS don't)
+    decoder?: "compiled" | "runtime" | "none";  // where its on-device decoder comes from (firmware with runtime decoding)
 }
 
 export interface DevManTypeFileStatus {

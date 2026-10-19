@@ -1517,3 +1517,43 @@ h1 {
     color: #888;
     white-space: nowrap;
 }
+
+/* Device type file panel */
+.type-file-panel h3 {
+  margin-top: 0;
+}
+.type-file-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin: 8px 0;
+}
+.type-file-status,
+.type-file-info {
+  font-size: 0.9em;
+  margin: 4px 0;
+  word-break: break-word;
+}
+.type-file-warning {
+  font-size: 0.9em;
+  margin: 4px 0;
+  color: #e57373;
+}
+.type-file-entries {
+  border-collapse: collapse;
+  font-size: 0.85em;
+  margin: 6px 0;
+  width: 100%;
+}
+.type-file-entries th,
+.type-file-entries td {
+  border-bottom: 1px solid rgba(128, 128, 128, 0.3);
+  padding: 2px 6px;
+  text-align: left;
+  vertical-align: top;
+}
+.type-file-rejected td {
+  color: #e57373;
+}
+

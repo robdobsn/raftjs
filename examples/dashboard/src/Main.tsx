@@ -13,6 +13,7 @@ import DevicesPanel from './DevicesPanel';
 import CommandPanel from './CommandPanel';
 import LoggingPanel from './LoggingPanel';
 import LogFilesPanel from './LogFilesPanel';
+import TypeFilePanel from './TypeFilePanel';
 import LogConfigPanel, { LogConfig } from './LogConfigPanel';
 import CameraPanel from './CameraPanel';
 import CameraFeedStore from './CameraFeedStore';
@@ -333,6 +334,7 @@ export default function Main() {
                   <StatusPanel />
                   {latencyTestEnabled && <LatencyTestPanel />}
                   <CommandPanel />
+                  <TypeFilePanel />
                   {cameraSupported && (
                     <CameraPanel onSnapshotTaken={() => setImageRefreshTrigger(n => n + 1)} />
                   )}
