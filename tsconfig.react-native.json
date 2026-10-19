@@ -1,13 +1,13 @@
 {
 "compilerOptions": {
     "target": "es2017",
-    "module": "commonjs",
+    "module": "node16",
     "lib": ["dom", "es2017"],
     "outDir": "./dist/react-native",
     "rootDir": "./src",
     "moduleSuffixes": [".native", ""],
     "strict": true,
-    "moduleResolution": "node",
+    "moduleResolution": "node16",
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
