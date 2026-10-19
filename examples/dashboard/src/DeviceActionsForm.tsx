@@ -192,12 +192,14 @@ const DeviceActionsForm: React.FC<DeviceActionsTableProps> = ({ deviceKey }: Dev
                             );
                         } else if (action.map) {
                             const mapKeys = Object.keys(action.map).sort((a, b) => parseFloat(a) - parseFloat(b));
-                            // Use "Rate Hz" label for _conf.rate actions
-                            const actionLabel = action.n === '_conf.rate' ? 'Rate Hz' : (action.desc ?? action.n);
+                            // Label: "Rate Hz" for _conf.rate, the description for other _conf.* settings (their names
+                            // aren't readable), otherwise the action name - the description is shown on hover
+                            const actionLabel = action.n === '_conf.rate' ? 'Rate Hz' :
+                                (action.n.startsWith('_conf.') ? (action.desc ?? action.n) : action.n);
                             const actionValue = inputValues[action.n] ?? getDefaultActionValue(action);
                             return (
                                 <tr key={action.n}>
-                                    <td>{actionLabel}</td>
+                                    <td title={action.desc}>{actionLabel}</td>
                                     <td>
                                         <select
                                             value={actionValue}
@@ -233,7 +235,7 @@ const DeviceActionsForm: React.FC<DeviceActionsTableProps> = ({ deviceKey }: Dev
                             const actionValue = inputValues[action.n] ?? getDefaultActionValue(action);
                             return (
                                 <tr key={action.n}>
-                                    <td>{action.n}</td>
+                                    <td title={action.desc}>{action.n}</td>
                                     <td>
                                         {action.t ? (
                                             <input
