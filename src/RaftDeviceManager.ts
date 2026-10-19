@@ -1458,7 +1458,7 @@ export class DeviceManager implements RaftDeviceMgrIF{
             }
             const mappedHex = getActionMapHex(mapEntry);
             // Map values may contain &-separated multi-writes (e.g. "1048&114C&0a26")
-            const writes = mappedHex.split('&');
+            const writes = mappedHex.split('&').filter(hexWr => hexWr.length > 0);
             const { bus: devBus, addr: devAddr } = this.parseDeviceKeyForCommand(deviceKey);
             try {
                 const msgHandler = this._systemUtils?.getMsgHandler();

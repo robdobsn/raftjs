@@ -134,7 +134,8 @@ export interface SampleRateResult {
 }
 
 export interface ActionMapEntry {
-    w: string;                      // Hex bytes to write (may contain &-separated multi-writes)
+    w?: string;                     // Hex bytes to write (may contain &-separated multi-writes). A _conf.rate entry
+                                    // may omit it: the rate then only sets the polling (i, s)
     i?: number;                     // Recommended polling interval in microseconds
     s?: number;                     // Recommended number of poll result samples (buffer depth)
 }
@@ -142,7 +143,7 @@ export interface ActionMapEntry {
 export type ActionMapValue = string | ActionMapEntry;
 
 export function getActionMapHex(entry: ActionMapValue): string {
-    return typeof entry === 'string' ? entry : entry.w;
+    return typeof entry === 'string' ? entry : (entry.w ?? "");
 }
 
 export function getActionMapEntry(entry: ActionMapValue): ActionMapEntry | null {
