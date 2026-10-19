@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import ConnManager from './ConnManager';
-import { DeviceTypeAction, ActionMapEntry } from '../../../src/RaftDeviceInfo';
+import { DeviceTypeAction, ActionMapEntry, getActionInputStep } from '../../../src/RaftDeviceInfo';
 import { VisualizerRegistry } from './visualizers';
 
 const connManager = ConnManager.getInstance();
@@ -240,11 +240,12 @@ const DeviceActionsForm: React.FC<DeviceActionsTableProps> = ({ deviceKey }: Dev
                                                 type="number"
                                                 min={action.r?.[0] ?? 0}
                                                 max={action.r?.[1] ?? 100}
+                                                step={getActionInputStep(action)}
                                                 value={actionValue}
                                                 onChange={(e) =>
                                                     handleInputChange(
                                                         action.n,
-                                                        parseInt(e.target.value, 10)
+                                                        parseFloat(e.target.value)
                                                     )
                                                 }
                                             />

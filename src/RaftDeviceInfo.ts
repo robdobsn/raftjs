@@ -176,6 +176,24 @@ export function sensirionCrc8(msb: number, lsb: number): number {
     return crc;
 }
 
+/** Whether an action type is a single integer value (e.g. "B", ">H", "<i") */
+export function isIntegerActionType(actionType: string): boolean {
+    return /^[<>!=@]?[bBhHiIlLqQ]$/.test(actionType);
+}
+
+/**
+ * The step for entering an action's value: the resolution the device takes. An integer type with mul (e.g. a
+ * temperature offset in units of 0.01 degrees, mul 100) takes steps of 1/mul; without mul, whole numbers.
+ * Other types (e.g. a float) take any value: "any"
+ */
+export function getActionInputStep(action: DeviceTypeAction): number | "any" {
+    if (!action.t || !isIntegerActionType(action.t)) {
+        return "any";
+    }
+    const mul = action.mul !== undefined && action.mul > 0 ? action.mul : 1;
+    return 1 / mul;
+}
+
 /**
  * The hex bytes an action writes for the given data (an action without a map): the value(s) after sub and mul,
  * packed with t, then crc check bytes if the action has them, between the w prefix and the wz suffix.
@@ -190,6 +208,10 @@ export function encodeActionWrite(action: DeviceTypeAction, data: number[]): str
         }
         if (action.mul !== undefined) {
             value = value * action.mul;
+        }
+        // Round for an integer type: packing truncates, and e.g. 0.29 * 100 is 28.999999999999996
+        if (action.t && isIntegerActionType(action.t)) {
+            value = Math.round(value);
         }
         writeBytes = action.t ? structPack(action.t, [value]) : new Uint8Array(0);
     } else {
