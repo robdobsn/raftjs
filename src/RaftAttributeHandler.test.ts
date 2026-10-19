@@ -260,6 +260,13 @@ describe("value and bit labels", () => {
         const withZero = { ...decode(1, 0)["status"], bitLabels: { "0": "OK", "0x01": "A" } } as DeviceAttributeState;
         expect(deviceAttrGetLatestFormatted(withZero)).toBe("OK");
     });
+    test("bl: an empty label ignores its bits", () => {
+        const st = { ...decode(1, 0)["status"], bitLabels: { "0x04": "VL", "0x40": "" } } as DeviceAttributeState;
+        expect(deviceAttrValueLabel(0x40, st)).toBe("-");
+        expect(deviceAttrValueLabel(0x44, st)).toBe("VL");
+        const withZero = { ...st, bitLabels: { "0": "OK", "0x40": "" } } as DeviceAttributeState;
+        expect(deviceAttrValueLabel(0x40, withZero)).toBe("OK");
+    });
     test("bl: a 16-bit mask", () => {
         const st = { ...decode(1, 0)["status"], bitLabels: { "0x0040": "testing mode" } } as DeviceAttributeState;
         expect(deviceAttrValueLabel(0x0140, st)).toBe("testing mode +0x100");

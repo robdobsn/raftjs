@@ -29,7 +29,8 @@ export function deviceAttrGetLatestFormatted(attrState: DeviceAttributeState): s
  * has neither. Labels are display only: the value itself stays numeric everywhere else.
  *   vl: the label for the value; an unlisted value gives "<value> (?)"
  *   bl: the labels of the bits set, space separated, in mask order; set bits without a label are added as hex
- *       ("+0x80"); a value of 0 gives the "0" entry's label, or "-"
+ *       ("+0x80"); an empty label ignores its bits (e.g. a configuration bit that is always set); a value of 0, or
+ *       one with only ignored bits set, gives the "0" entry's label, or "-"
  * vl takes precedence if an attribute has both.
  */
 export function deviceAttrValueLabel(value: number | string, attrState: DeviceAttributeState): string | null {
@@ -42,8 +43,9 @@ export function deviceAttrValueLabel(value: number | string, attrState: DeviceAt
     }
     if (attrState.bitLabels) {
         const bits = Math.round(value) >>> 0;
+        const zeroLabel = attrState.bitLabels["0"] ?? "-";
         if (bits === 0) {
-            return attrState.bitLabels["0"] ?? "-";
+            return zeroLabel;
         }
         const masks = Object.keys(attrState.bitLabels)
             .filter((key) => key !== "0")
@@ -54,14 +56,16 @@ export function deviceAttrValueLabel(value: number | string, attrState: DeviceAt
         let unlabelled = bits;
         for (const entry of masks) {
             if ((bits & entry.mask) === entry.mask) {
-                labels.push(entry.label);
+                if (entry.label !== "") {
+                    labels.push(entry.label);
+                }
                 unlabelled &= ~entry.mask;
             }
         }
         if (unlabelled !== 0) {
             labels.push(`+0x${(unlabelled >>> 0).toString(16)}`);
         }
-        return labels.join(' ');
+        return labels.length > 0 ? labels.join(' ') : zeroLabel;
     }
     return null;
 }
