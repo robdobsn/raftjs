@@ -192,6 +192,8 @@ export default class AttributeHandler {
                     elemLabels: attrDef.el,
                     elemUnits: attrDef.eu !== undefined ? decodeAttrUnitsEncoding(attrDef.eu) : undefined,
                     visualGroup: attrDef.vg,
+                    valueLabels: attrDef.vl,
+                    bitLabels: attrDef.bl,
                 };
             }
 

@@ -2,7 +2,7 @@ import React, { useEffect, useState, memo, useRef, useMemo } from "react";
 import { Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement, ArcElement, Tooltip, Legend } from 'chart.js';
 import { Line } from "react-chartjs-2";
 import ConnManager from "./ConnManager";
-import { DeviceState } from "../../../src/RaftDeviceStates";
+import { DeviceState, deviceAttrValueLabel } from "../../../src/RaftDeviceStates";
 import SettingsManager from "./SettingsManager";
 
 const connManager = ConnManager.getInstance();
@@ -123,7 +123,19 @@ const DeviceLineChart: React.FC<DeviceLineChartProps> = memo(({ deviceKey, lastU
         // requestAnimationFrame canvas redraws (even at duration 1) that surface as long
         // scheduler tasks. Updates are already paced by the panel's ~500ms chart timer.
         animation: false as const,
-        scales: chartScales
+        scales: chartScales,
+        plugins: {
+            tooltip: {
+                callbacks: {
+                    // Show an attribute's value label or bit labels (vl/bl) beside the value
+                    label: (ctx: any) => {
+                        const attrState = deviceState?.deviceAttributes[ctx.dataset.label];
+                        const valueLabel = attrState ? deviceAttrValueLabel(ctx.parsed.y, attrState) : null;
+                        return `${ctx.dataset.label}: ${ctx.formattedValue}${valueLabel !== null ? ` (${valueLabel})` : ''}`;
+                    },
+                },
+            },
+        },
     };
 
     // Colour of each attribute's trace (kept once assigned) and the colours of the traces on each y axis

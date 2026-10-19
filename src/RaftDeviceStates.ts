@@ -18,10 +18,58 @@ export function deviceAttrGetLatestFormatted(attrState: DeviceAttributeState): s
     const elemsPerSample = attrState.elemsPerSample ?? 1;
     if (elemsPerSample > 1 && attrState.values.length >= elemsPerSample) {
         const sample = attrState.values.slice(-elemsPerSample);
-        return '[' + sample.map(v => deviceAttrFormatValue(v, attrState.format)).join(', ') + ']';
+        return '[' + sample.map(v => deviceAttrFormatLabelled(v, attrState)).join(', ') + ']';
     }
     const value = attrState.values[attrState.values.length - 1];
-    return deviceAttrFormatValue(value, attrState.format);
+    return deviceAttrFormatLabelled(value, attrState);
+}
+
+/**
+ * The display label for a value of an attribute with value labels (vl) or bit labels (bl), or null if the attribute
+ * has neither. Labels are display only: the value itself stays numeric everywhere else.
+ *   vl: the label for the value; an unlisted value gives "<value> (?)"
+ *   bl: the labels of the bits set, space separated, in mask order; set bits without a label are added as hex
+ *       ("+0x80"); a value of 0 gives the "0" entry's label, or "-"
+ * vl takes precedence if an attribute has both.
+ */
+export function deviceAttrValueLabel(value: number | string, attrState: DeviceAttributeState): string | null {
+    if (typeof value === 'string' || Number.isNaN(value)) {
+        return null;
+    }
+    if (attrState.valueLabels) {
+        const label = attrState.valueLabels[String(value)];
+        return label !== undefined ? label : `${deviceAttrFormatValue(value, attrState.format)} (?)`;
+    }
+    if (attrState.bitLabels) {
+        const bits = Math.round(value) >>> 0;
+        if (bits === 0) {
+            return attrState.bitLabels["0"] ?? "-";
+        }
+        const masks = Object.keys(attrState.bitLabels)
+            .filter((key) => key !== "0")
+            .map((key) => ({ mask: Number(key) >>> 0, label: attrState.bitLabels![key] }))
+            .filter((entry) => entry.mask !== 0 && !Number.isNaN(entry.mask))
+            .sort((a, b) => a.mask - b.mask);
+        const labels: string[] = [];
+        let unlabelled = bits;
+        for (const entry of masks) {
+            if ((bits & entry.mask) === entry.mask) {
+                labels.push(entry.label);
+                unlabelled &= ~entry.mask;
+            }
+        }
+        if (unlabelled !== 0) {
+            labels.push(`+0x${(unlabelled >>> 0).toString(16)}`);
+        }
+        return labels.join(' ');
+    }
+    return null;
+}
+
+// A value formatted for display: its label if the attribute has value or bit labels, otherwise the formatted number
+function deviceAttrFormatLabelled(value: number | string, attrState: DeviceAttributeState): string {
+    const label = deviceAttrValueLabel(value, attrState);
+    return label !== null ? label : deviceAttrFormatValue(value, attrState.format);
 }
 
 function deviceAttrFormatValue(value: number | string, formatIn: string): string {
@@ -80,6 +128,9 @@ export interface DeviceAttributeState {
     elemUnits?: string;
     // Visual group for timeline chart splitting (from schema vg field)
     visualGroup?: string;
+    // Value labels and bit labels for display (from schema vl and bl fields) - see deviceAttrValueLabel
+    valueLabels?: Record<string, string>;
+    bitLabels?: Record<string, string>;
 }
 
 export interface DeviceAttributesState {

@@ -1,6 +1,6 @@
 import AttributeHandler from "./RaftAttributeHandler";
 import { getAttrElemsPerSample, DeviceTypePollRespMetadata } from "./RaftDeviceInfo";
-import { DeviceAttributesState, DeviceTimeline, deviceAttrGetLatestFormatted } from "./RaftDeviceStates";
+import { DeviceAttributesState, DeviceAttributeState, DeviceTimeline, deviceAttrGetLatestFormatted, deviceAttrValueLabel } from "./RaftDeviceStates";
 
 function newTimeline(): DeviceTimeline {
     return {
@@ -224,5 +224,51 @@ describe("SCD30 custom decode", () => {
         const devAttrsState: DeviceAttributesState = {};
         handler.processMsgAttrGroup(scd30Msg(0, null), 0, newTimeline(), meta, devAttrsState, 100);
         expect(devAttrsState["CO2"]?.values ?? []).toEqual([]);
+    });
+});
+
+// Value labels (vl) and bit labels (bl): display text only - the stored values stay numeric
+describe("value and bit labels", () => {
+    const meta: DeviceTypePollRespMetadata = {
+        b: 2,
+        a: [
+            { n: "pmState", t: "B", r: [0, 4], f: "d", o: "uint8", vl: { "0": "unknown", "1": "OK", "2": "low", "3": "critical" } },
+            { n: "status", t: "B", r: [0, 255], f: "02x", o: "uint8", bl: { "0x04": "VL", "0x08": "VR", "0x10": "HD", "0x40": "EnVr" } },
+        ]
+    } as DeviceTypePollRespMetadata;
+    function decode(pm: number, status: number): DeviceAttributesState {
+        const st: DeviceAttributesState = {};
+        new AttributeHandler().processMsgAttrGroup(new Uint8Array([0x00, 0x10, pm, status]), 0, newTimeline(), meta, st, 100);
+        return st;
+    }
+    test("vl labels a value; values stay numeric", () => {
+        const st = decode(3, 0);
+        expect(st["pmState"].values).toEqual([3]);
+        expect(deviceAttrGetLatestFormatted(st["pmState"])).toBe("critical");
+    });
+    test("vl: an unlisted value shows the formatted number and (?)", () => {
+        expect(deviceAttrGetLatestFormatted(decode(7, 0)["pmState"])).toBe("7 (?)");
+    });
+    test("bl: set bits' labels in mask order, unlabelled bits as hex", () => {
+        const st = decode(1, 0x5c);
+        expect(st["status"].values).toEqual([0x5c]);
+        expect(deviceAttrGetLatestFormatted(st["status"])).toBe("VL VR HD EnVr");
+        expect(deviceAttrGetLatestFormatted(decode(1, 0x85)["status"])).toBe("VL +0x81");
+    });
+    test("bl: zero shows - or the 0 entry", () => {
+        expect(deviceAttrGetLatestFormatted(decode(1, 0)["status"])).toBe("-");
+        const withZero = { ...decode(1, 0)["status"], bitLabels: { "0": "OK", "0x01": "A" } } as DeviceAttributeState;
+        expect(deviceAttrGetLatestFormatted(withZero)).toBe("OK");
+    });
+    test("bl: a 16-bit mask", () => {
+        const st = { ...decode(1, 0)["status"], bitLabels: { "0x0040": "testing mode" } } as DeviceAttributeState;
+        expect(deviceAttrValueLabel(0x0140, st)).toBe("testing mode +0x100");
+    });
+    test("vl takes precedence over bl; no labels gives null", () => {
+        const both = { ...decode(2, 0)["pmState"], bitLabels: { "0x02": "B1" } } as DeviceAttributeState;
+        expect(deviceAttrValueLabel(2, both)).toBe("low");
+        const plain = { ...decode(2, 0)["pmState"], valueLabels: undefined } as DeviceAttributeState;
+        expect(deviceAttrValueLabel(2, plain)).toBeNull();
+        expect(deviceAttrGetLatestFormatted(plain)).toBe("2");
     });
 });
