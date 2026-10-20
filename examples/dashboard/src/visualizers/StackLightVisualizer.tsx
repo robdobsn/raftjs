@@ -8,7 +8,7 @@
 // Two device protocols, chosen by the action's write prefix:
 //  - "4001..." (ledstick PATTERN, StackLight): the device animates the tiers itself. One write
 //    sends [basePeriodMs, state per tier, bottom tier first]; a state byte is mode (bits 0-1) and
-//    rate (bits 2-3). See MultiFirmware apps/ledstick/LedStickApp/LedStickProtocol.h.
+//    rate (bits 2-3). See MultiFirmware RSAOAppCommon/LedStickService/LedStickProtocol.h.
 //  - anything else (e.g. "B0", ledstick FILL + show): one write of [start, count, R, G, B] per
 //    tier; tiers can only be off or steady.
 // Chain order: the first NX LEDs in the chain form the bottom tier.
