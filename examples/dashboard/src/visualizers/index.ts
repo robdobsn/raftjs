@@ -11,6 +11,7 @@ import SpectrumChart from './SpectrumChart';
 import LedGridVisualizer from './LedGridVisualizer';
 import VcpCalVisualizer from './VcpCalVisualizer';
 import ZoneGridVisualizer from './ZoneGridVisualizer';
+import StackLightVisualizer from './StackLightVisualizer';
 import { getAttrElemsPerSample } from '../../../../src/RaftDeviceInfo';
 
 VisualizerRegistry.register({
@@ -53,6 +54,19 @@ VisualizerRegistry.register({
         return 0;
     },
     component: LedGridVisualizer,
+});
+
+VisualizerRegistry.register({
+    id: 'stacklight',
+    placement: 'actions',
+    match: (item) => {
+        if (item.kind !== 'action') return 0;
+        if (item.action.vt === 'stacklight') return 100;
+        // Legacy-style format flag (as LEDPIX)
+        if (item.action.f === 'STACKLIGHT') return 10;
+        return 0;
+    },
+    component: StackLightVisualizer,
 });
 
 VisualizerRegistry.register({
