@@ -129,7 +129,7 @@ const DeviceActionsForm: React.FC<DeviceActionsTableProps> = ({ deviceKey }: Dev
 
     const handleSendAction = async (action: DeviceTypeAction, value: number) => {
         // Send action to device
-        if (!deviceManager) {
+        if (!deviceManager || !Number.isFinite(value)) {
             return;
         }
         // For _conf.rate actions, use setSampleRate for coordinated polling config
@@ -243,7 +243,7 @@ const DeviceActionsForm: React.FC<DeviceActionsTableProps> = ({ deviceKey }: Dev
                                                 min={action.r?.[0] ?? 0}
                                                 max={action.r?.[1] ?? 100}
                                                 step={getActionInputStep(action)}
-                                                value={actionValue}
+                                                value={Number.isFinite(actionValue) ? actionValue : ''}
                                                 onChange={(e) =>
                                                     handleInputChange(
                                                         action.n,
