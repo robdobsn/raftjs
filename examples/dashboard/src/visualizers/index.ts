@@ -12,6 +12,7 @@ import LedGridVisualizer from './LedGridVisualizer';
 import VcpCalVisualizer from './VcpCalVisualizer';
 import ZoneGridVisualizer from './ZoneGridVisualizer';
 import StackLightVisualizer from './StackLightVisualizer';
+import DistanceStripVisualizer from './DistanceStripVisualizer';
 import { getAttrElemsPerSample } from '../../../../src/RaftDeviceInfo';
 
 VisualizerRegistry.register({
@@ -41,6 +42,17 @@ VisualizerRegistry.register({
         return 0;
     },
     component: ZoneGridVisualizer,
+});
+
+VisualizerRegistry.register({
+    id: 'diststrip',
+    placement: 'charts',
+    match: (item) => {
+        if (item.kind !== 'attribute') return 0;
+        if (item.attribute.vt === 'diststrip') return 100;
+        return 0;
+    },
+    component: DistanceStripVisualizer,
 });
 
 VisualizerRegistry.register({

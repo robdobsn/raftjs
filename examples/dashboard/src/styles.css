@@ -407,6 +407,61 @@ h1 {
     color: #fff;
 }
 
+.device-diststrip {
+    padding: 10px;
+    border: 1px solid #666;
+    border-radius: 4px;
+    background-color: #282c34;
+    color: #fff;
+}
+
+.diststrip-grid {
+    display: grid;
+    gap: 4px;
+    width: min(100%, 36rem);
+}
+
+.diststrip-cell {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    min-height: 4rem;
+    padding: 4px;
+    border-radius: 4px;
+    font-variant-numeric: tabular-nums;
+    color: #fff;
+    text-shadow: 0 0 2px #000;
+}
+
+.diststrip-empty {
+    background: transparent;
+}
+
+.diststrip-label {
+    font-size: 0.7rem;
+    opacity: 0.85;
+}
+
+.diststrip-value {
+    font-size: 1rem;
+    font-weight: bold;
+}
+
+.diststrip-bar {
+    width: 100%;
+    height: 4px;
+    background-color: rgba(0, 0, 0, 0.35);
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+.diststrip-bar > div {
+    height: 100%;
+    background-color: #fff;
+}
+
 .device-zonegrid {
     padding: 10px;
     border: 1px solid #666;
