@@ -26,6 +26,13 @@ interface LogStatus {
   bytesPerSec: number;
 }
 
+// The data rate a session with the current config would give (datalog?action=estimate), and the device's limit
+interface RateEstimate {
+  bytesPerSec: number;
+  maxBytesPerSec: number;   // 0 = no limit
+  withinLimit: boolean;
+}
+
 interface CameraCaptureStatus {
   active: boolean;
   fs: string;
@@ -64,6 +71,7 @@ export default function LoggingPanel({ onLogStopped, pausePolling, logConfig, ca
   const [isBusy, setIsBusy] = useState(false);
   const [lastError, setLastError] = useState('');
   const [cameraWarning, setCameraWarning] = useState('');
+  const [rateEstimate, setRateEstimate] = useState<RateEstimate | null>(null);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const wasLoggingRef = useRef(false);
   const cameraSessionRef = useRef(false);
@@ -162,20 +170,45 @@ export default function LoggingPanel({ onLogStopped, pausePolling, logConfig, ca
     };
   }, [pausePolling]);
 
+  // The datalog config sent to the device (without the dashboard-side camera settings), or '' for the device's default
+  const datalogConfigParam = (): string => {
+    if (!logConfig || logConfig.devices.length === 0) return '';
+    const { camera: _camera, ...datalogConfig } = logConfig;
+    return `&config=${encodeQueryValue(JSON.stringify(datalogConfig))}`;
+  };
+
+  // Estimate the data rate when the config changes (a start over the device's limit is refused). Firmware without
+  // the estimate gives no maxBytesPerSec, and nothing is shown
+  useEffect(() => {
+    if (pausePolling || status.isLogging) return;
+    const timer = setTimeout(async () => {
+      if (!connManager.getConnector().isConnected()) return;
+      try {
+        const resp = await connManager.getConnector().sendRICRESTMsg(
+          `datalog?action=estimate${datalogConfigParam()}`, {}
+        );
+        const r = resp as any;
+        if (r?.rslt === 'ok' && typeof r.maxBytesPerSec === 'number') {
+          setRateEstimate({ bytesPerSec: r.bytesPerSec ?? 0, maxBytesPerSec: r.maxBytesPerSec, withinLimit: r.withinLimit !== false });
+        } else {
+          setRateEstimate(null);
+        }
+      } catch (e) {
+        setRateEstimate(null);
+      }
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [logConfig, pausePolling, status.isLogging]);
+
   const handleStart = async () => {
     setIsBusy(true);
     setLastError('');
     setCameraWarning('');
     try {
       const labelParam = label.trim() ? `&label=${encodeQueryValue(label.trim())}` : '';
-      let configParam = '';
-      // Strip the dashboard-side camera settings from the config sent to the
-      // datalog endpoint (they drive camera?action=start below)
+      // The camera settings drive camera?action=start below
+      const configParam = datalogConfigParam();
       const cameraConfig = logConfig?.camera;
-      if (logConfig && logConfig.devices.length > 0) {
-        const { camera: _camera, ...datalogConfig } = logConfig;
-        configParam = `&config=${encodeQueryValue(JSON.stringify(datalogConfig))}`;
-      }
       // Include current UTC time so firmware can timestamp the log even without NTP
       const utcParam = `&UTC=${encodeQueryValue(new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'))}`;
       const posixTZ = getHostPosixTZ();
@@ -185,7 +218,7 @@ export default function LoggingPanel({ onLogStopped, pausePolling, logConfig, ca
       );
       const r = resp as any;
       if (r?.rslt !== 'ok') {
-        setLastError(r?.error || 'Start failed');
+        setLastError(r?.error || r?.reason || 'Start failed');
       } else if (cameraAvailable && cameraConfig?.enabled) {
         // Start the camera interval-capture session alongside logging.
         // Images go to a per-session folder named after the label (or timestamp).
@@ -360,6 +393,18 @@ export default function LoggingPanel({ onLogStopped, pausePolling, logConfig, ca
               onChange={(e) => setLabel(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') handleStart(); }}
             />
+            {rateEstimate && rateEstimate.bytesPerSec > 0 && (
+              <div className="info-line">
+                <div className="info-label">Est. rate:</div>
+                <div className="info-value">{formatBytes(Math.round(rateEstimate.bytesPerSec))}/s</div>
+              </div>
+            )}
+            {rateEstimate && !rateEstimate.withinLimit && (
+              <div className="logging-warning">
+                This is more than the device can log ({formatBytes(rateEstimate.maxBytesPerSec)}/s), so it won't start:
+                log fewer devices or attributes, or log less often
+              </div>
+            )}
             <div className="logging-button-row">
               <button
                 className="action-button"
