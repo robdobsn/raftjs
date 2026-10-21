@@ -31,6 +31,7 @@ interface RateEstimate {
   bytesPerSec: number;
   maxBytesPerSec: number;   // 0 = no limit
   withinLimit: boolean;
+  fillSecs?: number;        // time until the device's file system is full at this rate (if known)
 }
 
 interface CameraCaptureStatus {
@@ -189,7 +190,8 @@ export default function LoggingPanel({ onLogStopped, pausePolling, logConfig, ca
         );
         const r = resp as any;
         if (r?.rslt === 'ok' && typeof r.maxBytesPerSec === 'number') {
-          setRateEstimate({ bytesPerSec: r.bytesPerSec ?? 0, maxBytesPerSec: r.maxBytesPerSec, withinLimit: r.withinLimit !== false });
+          setRateEstimate({ bytesPerSec: r.bytesPerSec ?? 0, maxBytesPerSec: r.maxBytesPerSec, withinLimit: r.withinLimit !== false,
+                            fillSecs: typeof r.fillSecs === 'number' ? r.fillSecs : undefined });
         } else {
           setRateEstimate(null);
         }
@@ -396,7 +398,10 @@ export default function LoggingPanel({ onLogStopped, pausePolling, logConfig, ca
             {rateEstimate && rateEstimate.bytesPerSec > 0 && (
               <div className="info-line">
                 <div className="info-label">Est. rate:</div>
-                <div className="info-value">{formatBytes(Math.round(rateEstimate.bytesPerSec))}/s</div>
+                <div className="info-value">
+                  {formatBytes(Math.round(rateEstimate.bytesPerSec))}/s
+                  {rateEstimate.fillSecs !== undefined && ` (storage full in ${formatDuration(rateEstimate.fillSecs)})`}
+                </div>
               </div>
             )}
             {rateEstimate && !rateEstimate.withinLimit && (
