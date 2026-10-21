@@ -8,13 +8,13 @@
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 import { DeviceAttributeState, DeviceAttributesState, DevicesState, DeviceState, DeviceStats, DeviceOnlineState, formatDeviceAddrHex, getDeviceKey, parseDeviceKey } from "./RaftDeviceStates";
-import { DeviceMsgJson } from "./RaftDeviceMsg";
+import { DeviceMsgJson, DeviceMsgJsonElem } from "./RaftDeviceMsg";
 import { RaftOKFail } from './RaftTypes';
-import { DeviceTypeInfo, DeviceTypeAction, DeviceTypeInfoRecs, DeviceTypePollRespMetadata, RaftDevTypeInfoResponse, SampleRateResult, getActionMapHex } from "./RaftDeviceInfo";
+import { DeviceTypeInfo, DeviceTypeAction, DeviceTypeInfoRecs, DeviceTypePollRespMetadata, RaftDevTypeInfoResponse, SampleRateResult, getActionMapHex, encodeActionWrite } from "./RaftDeviceInfo";
 import AttributeHandler from "./RaftAttributeHandler";
 import RaftSystemUtils from "./RaftSystemUtils";
 import RaftDeviceMgrIF from "./RaftDeviceMgrIF";
-import { structPack, structSizeOf } from "./RaftStruct";
+import { structSizeOf } from "./RaftStruct";
 // import RaftUtils from "./RaftUtils";
 
 // Devbin record payload formats. See devdocs/devbin-protocol-versioning.md
@@ -41,6 +41,76 @@ export interface DeviceDecodedData {
 
 interface DeviceStatsInternal extends DeviceStats {
     windowEvents: Array<{ timeMs: number; samples: number }>;
+}
+
+export type DevManTypePolicy = "enabled" | "disabled" | "disabledClaim";
+
+export interface DevManListDevs {
+    devices?: Array<{ deviceid: string; name?: string; displayName?: string; role?: string; dtIdx?: number }>;
+}
+
+export interface DevManTypes {
+    total?: number;
+    generation?: number;
+    types?: Array<{ dtIdx: number; key: string; src: string; policy: DevManTypePolicy }>;
+}
+
+export interface DevManIdentInfo {
+    deviceID?: string;
+    ident?: {
+        online?: string;
+        state?: string;
+        attempts?: number;
+        nextInMs?: number;
+        dtIdx?: number;
+        polled?: boolean;
+        reverify?: boolean;
+        reident?: boolean;
+        candidates?: Array<{ dtIdx: number; key: string }>;
+        hook?: boolean;
+    };
+}
+
+export interface DevManDevEnable {
+    deviceID?: string;
+    poll?: boolean;
+    online?: boolean;
+    saved?: boolean;
+}
+
+export interface DevManTypeFileEntry {
+    key: string;
+    outcome: "added" | "replaced" | "unchanged" | "disabled" | "rejected";
+    error?: string;
+    warnings?: string;
+    noDecoder?: boolean;        // has data but no on-device decoder (raftjs decodes it; DataLogger, RaftROS don't)
+    decoder?: "compiled" | "runtime" | "none";  // where its on-device decoder comes from (firmware with runtime decoding)
+}
+
+export interface DevManTypeFileStatus {
+    file?: string;
+    state?: string;
+    present?: boolean;
+    crc?: string;
+    restartRequired?: boolean;
+    firstError?: string;
+    entries?: DevManTypeFileEntry[];    // with getTypeFileStatus(true)
+}
+
+export interface DevManTypeFileCheck {
+    file?: string;
+    bytes?: number;
+    crc?: string;
+    valid?: boolean;            // nothing rejected
+    added?: number;
+    replaced?: number;
+    unchanged?: number;
+    disabled?: number;
+    rejected?: number;
+    warnings?: number;
+    firstError?: string;
+    firstWarning?: string;
+    entries?: DevManTypeFileEntry[];
 }
 
 export class DeviceManager implements RaftDeviceMgrIF{
@@ -73,6 +143,7 @@ export class DeviceManager implements RaftDeviceMgrIF{
     private _newAttributeDataCallbacks: Array<(deviceKey: string, attrState: DeviceAttributeState) => void> = [];
     private _decodedDataCallbacks: Array<(decoded: DeviceDecodedData) => void> = [];
     private _deviceRemovedCallbacks: Array<(deviceKey: string, state: DeviceState) => void> = [];
+    private _deviceNameChangedCallbacks: Array<(deviceKey: string, state: DeviceState) => void> = [];
 
     // Debug message index (to help debug with async messages)
     private _debugMsgIndex = 0;
@@ -97,8 +168,23 @@ export class DeviceManager implements RaftDeviceMgrIF{
         this._deviceStats[deviceKey] = this.createEmptyStats();
     }
 
-    // Cached device type data
+    // Cached device type data. Type data is keyed by device type index (bustype:<bus>:<index>), which means one
+    // record for a whole firmware boot - but can mean a different record after a reboot, OTA or type file
+    // change - so these caches last for one subscription (see clearDeviceTypeCaches()). Type data must be
+    // looked up by each record's own index, never by device ID, because the device at a device ID can change
+    // type (it is re-identified, or a different device is plugged in)
     private _cachedDeviceTypeRecs: DeviceTypeInfoRecs = {};
+
+    // Per device ID: the device type index (or type key from older firmware) its type data was resolved for.
+    // A record with a different one means the device has changed type
+    private _deviceTypeIdSeen: { [deviceKey: string]: string } = {};
+
+    // Per device ID: instance data (name, role) from the per-device typeinfo request. It belongs to the
+    // device's location, not its type, so it is kept when the device changes type
+    private _deviceInstanceData: { [deviceKey: string]: { name?: string; role?: string; displayName?: string } } = {};
+
+    // Incremented when the type caches are cleared, so a request started before then doesn't refill them
+    private _typeCacheGeneration = 0;
 
     // Cached device type previous attempt times
     private _cachedDeviceTypePreviousAttemptTimes: { [deviceType: string]: number } = {};
@@ -126,6 +212,54 @@ export class DeviceManager implements RaftDeviceMgrIF{
 
     // Constructor
     constructor() {
+    }
+
+    ////////////////////////////////////////////////////////////////////////////
+    // Clear cached device type data
+    ////////////////////////////////////////////////////////////////////////////
+
+    /**
+     * Clear cached device type data (decode metadata keyed by device type index, and per-device instance data).
+     * A device type index means the same record for a whole firmware boot but may mean a different one after a
+     * reboot, OTA or type file change, so the cache is valid for one subscription. RaftConnector calls this
+     * before it subscribes or re-subscribes; an app that subscribes itself should call it first.
+     * Devices keep their current type data until the next record for them is processed, when it is looked
+     * up again.
+     */
+    public clearDeviceTypeCaches(): void {
+        this._cachedDeviceTypeRecs = {};
+        this._cachedDeviceTypePreviousAttemptTimes = {};
+        this._deviceTypeIdSeen = {};
+        this._deviceInstanceData = {};
+        this._typeCacheGeneration++;
+    }
+
+    // Note the device type (index, or key from older firmware) of a record for a device. If the device has
+    // changed type its per-device data is forgotten so it is requested again. Returns true if the device's type
+    // data needs to be resolved (new device, type changed, or not resolved since the caches were cleared)
+    private noteRecordDeviceType(deviceKey: string, typeId: string): { needsResolve: boolean; typeChanged: boolean } {
+        const prevTypeId = this._deviceTypeIdSeen[deviceKey];
+        const typeChanged = (prevTypeId !== undefined) && (prevTypeId !== typeId);
+        if (typeChanged) {
+            delete this._cachedDeviceTypeRecs[deviceKey];
+            delete this._cachedDeviceTypePreviousAttemptTimes[deviceKey];
+            delete this._deviceTypeIdSeen[deviceKey];
+        }
+        const deviceState = this._devicesState[deviceKey];
+        const needsResolve = !deviceState || (deviceState.deviceTypeInfo === undefined) || (prevTypeId !== typeId);
+        return { needsResolve, typeChanged };
+    }
+
+    // Type data for decoding a device's records with its instance data (name, role) applied
+    private withInstanceData(typeInfo: DeviceTypeInfo, deviceKey: string): DeviceTypeInfo {
+        const instanceData = this._deviceInstanceData[deviceKey];
+        if (!instanceData || ((instanceData.name === undefined) && (instanceData.role === undefined))) {
+            return typeInfo;
+        }
+        const merged: DeviceTypeInfo = { ...typeInfo };
+        if (instanceData.name !== undefined) merged.name = instanceData.name;
+        if (instanceData.role !== undefined) merged.role = instanceData.role;
+        return merged;
     }
 
     ////////////////////////////////////////////////////////////////////////////
@@ -209,6 +343,18 @@ export class DeviceManager implements RaftDeviceMgrIF{
 
     public removeDecodedDataCallback(callback: (decoded: DeviceDecodedData) => void): void {
         this._decodedDataCallbacks = this._decodedDataCallbacks.filter((cb) => cb !== callback);
+    }
+
+    // Called when the device name or display name of a known device changes (e.g. after setDeviceName, or when
+    // the device is identified again as another type)
+    public addDeviceNameChangedCallback(callback: (deviceKey: string, state: DeviceState) => void): void {
+        if (!this._deviceNameChangedCallbacks.includes(callback)) {
+            this._deviceNameChangedCallbacks.push(callback);
+        }
+    }
+
+    public removeDeviceNameChangedCallback(callback: (deviceKey: string, state: DeviceState) => void): void {
+        this._deviceNameChangedCallbacks = this._deviceNameChangedCallbacks.filter((cb) => cb !== callback);
     }
 
     public addDeviceRemovedCallback(callback: (deviceKey: string, state: DeviceState) => void): void {
@@ -393,7 +539,7 @@ export class DeviceManager implements RaftDeviceMgrIF{
             recordPos += deviceAddrLen;
 
             // Device type index (uint16 big-endian)
-            const devTypeIdx = (rxMsg[recordPos] << 8) + rxMsg[recordPos + 1];
+            const deviceTypeIndex = (rxMsg[recordPos] << 8) + rxMsg[recordPos + 1];
             recordPos += devTypeIdxLen;
 
             // Common record header ends here. The deviceSeqNum byte is only
@@ -403,11 +549,11 @@ export class DeviceManager implements RaftDeviceMgrIF{
 
             // Resolve per-record payload format using the type schema (if
             // already cached). DevbinV0Fixed firmware reports bus=0 addr=0 for
-            // all direct devices, so we briefly look up by bus/devTypeIdx to
+            // all direct devices, so we briefly look up by bus/device type index to
             // find the schema before settling on the device key.
             let recordPayloadFormat = payloadFormat;
             let recordHeaderLen = recordPayloadFormat === "DevbinV1Framed" ? devbinV1FramedHeaderLen : devbinV0FixedHeaderLen;
-            const resolvedDeviceTypeInfo = await this.getDeviceTypeInfoForMsg(busNum.toString(), devTypeIdx.toString());
+            const resolvedDeviceTypeInfo = await this.getDeviceTypeInfoForMsg(busNum.toString(), deviceTypeIndex.toString());
             if (resolvedDeviceTypeInfo?.resp) {
                 recordPayloadFormat = this.resolveRecordPayloadFormat(rxMsg, commonRecordHeaderEndPos,
                     samplesEndPos, resolvedDeviceTypeInfo.resp, recordPayloadFormat, deviceSeqNumLen);
@@ -432,14 +578,14 @@ export class DeviceManager implements RaftDeviceMgrIF{
 
             // Debug
             // console.log(`DevMan.handleClientMsgBinary debugIdx ${debugMsgIndex} overallLen ${rxMsg.length} recordStart ${msgPos} recordLen ${recordLen} ${pollDataPos} ${RaftUtils.bufferToHex(rxMsg.slice(msgPos, msgPos + recordLenLen + recordLen))}`);
-            // console.log(`DevMan.handleClientMsgBinary debugIdx ${debugMsgIndex} bus ${busNum} isOnline ${isOnline} devAddr 0x${devAddr.toString(16)} devTypeIdx ${devTypeIdx} pollDataLen ${recordLen - recordHeaderLen}`);
+            // console.log(`DevMan.handleClientMsgBinary debugIdx ${debugMsgIndex} bus ${busNum} isOnline ${isOnline} devAddr 0x${devAddr.toString(16)} devTypeIdx ${deviceTypeIndex} pollDataLen ${recordLen - recordHeaderLen}`);
 
             // Format device address as canonical hex and build device key.
-            // Direct-connect devices (bus=0 addr=0) with different devTypeIdx
+            // Direct-connect devices (bus=0 addr=0) with different device type index
             // values would collide on the same "0_0" key, so records
-            // disambiguate by appending the devTypeIdx.
+            // disambiguate by appending the device type index.
             const devAddrHex = formatDeviceAddrHex(devAddr);
-            const deviceKey = this.getBinaryDeviceKey(busNum, devAddrHex, devTypeIdx);
+            const deviceKey = this.getBinaryDeviceKey(busNum, devAddrHex, deviceTypeIndex);
 
             // Update the last update time
             this._deviceLastUpdateTime[deviceKey] = Date.now();
@@ -451,28 +597,39 @@ export class DeviceManager implements RaftDeviceMgrIF{
                 continue;
             }
 
-            // Check if a device state already exists
-            if (!(deviceKey in this._devicesState) || (this._devicesState[deviceKey].deviceTypeInfo === undefined)) {
+            // Check if the device's type data needs resolving (new device, or its type has changed)
+            const typeId = deviceTypeIndex.toString();
+            const { needsResolve, typeChanged } = this.noteRecordDeviceType(deviceKey, typeId);
+            if (needsResolve) {
 
-                // For DevbinV1Framed (current firmware) try the richer
-                // per-device endpoint first (gives per-instance name/role),
-                // then fall back to the bus/type schema. DevbinV0Fixed firmware
-                // doesn't support the per-device endpoint (returns
-                // failBusMissing) so we skip it entirely for DevbinV0Fixed
-                // records to avoid noisy requests.
-                const deviceTypeInfo = recordPayloadFormat === "DevbinV1Framed"
-                    ? (await this.getDeviceTypeInfoForMsg(deviceKey)
-                        ?? resolvedDeviceTypeInfo
-                        ?? await this.getDeviceTypeInfoForMsg(busNum.toString(), devTypeIdx.toString()))
-                    : (resolvedDeviceTypeInfo
-                        ?? await this.getDeviceTypeInfoForMsg(busNum.toString(), devTypeIdx.toString()));
+                // Decode with the type data for this record's device type index. For DevbinV1Framed
+                // (current firmware) the per-device endpoint gives the per-instance name/role (and is
+                // the fallback for type data). DevbinV0Fixed firmware doesn't support the per-device
+                // endpoint (returns failBusMissing) so we skip it entirely for DevbinV0Fixed records to
+                // avoid noisy requests.
+                const indexTypeInfo = resolvedDeviceTypeInfo
+                    ?? await this.getDeviceTypeInfoForMsg(busNum.toString(), typeId);
+                let deviceTypeInfo: DeviceTypeInfo | undefined;
+                if (recordPayloadFormat === "DevbinV1Framed") {
+                    const perDeviceInfo = await this.getDeviceTypeInfoForMsg(deviceKey);
+                    deviceTypeInfo = indexTypeInfo ? this.withInstanceData(indexTypeInfo, deviceKey) : perDeviceInfo;
+                } else {
+                    deviceTypeInfo = indexTypeInfo;
+                }
+                if (deviceTypeInfo !== undefined) {
+                    this._deviceTypeIdSeen[deviceKey] = typeId;
+                } else if (typeChanged && (deviceKey in this._devicesState)) {
+                    // Never decode with the previous type's data
+                    this._devicesState[deviceKey].deviceTypeInfo = undefined;
+                }
                 
                 // Debug
-                // console.log(`DevMan.handleClientMsgBinary debugIdx ${debugMsgIndex} pollDataPos ${pollDataPos} busNum ${busNum} devAddr 0x${devAddr.toString(16)} devTypeIdx ${devTypeIdx} deviceTypeInfo ${JSON.stringify(deviceTypeInfo)}`);
+                // console.log(`DevMan.handleClientMsgBinary debugIdx ${debugMsgIndex} pollDataPos ${pollDataPos} busNum ${busNum} devAddr 0x${devAddr.toString(16)} devTypeIdx ${deviceTypeIndex} deviceTypeInfo ${JSON.stringify(deviceTypeInfo)}`);
 
-                // Handle case where device type info is not available
-                if (deviceTypeInfo === undefined) {
-                    console.warn(`DevMan.handleClientMsgBinary debugIdx ${debugMsgIndex} deviceType ${devTypeIdx} info not available, skipping attribute processing for this record`);
+                // Handle case where device type info is not available (a device whose type hasn't changed
+                // keeps the type data it has)
+                if ((deviceTypeInfo === undefined) && !this._devicesState[deviceKey]?.deviceTypeInfo) {
+                    console.warn(`DevMan.handleClientMsgBinary debugIdx ${debugMsgIndex} deviceType ${deviceTypeIndex} info not available, skipping attribute processing for this record`);
                     // Skip to next record without processing attributes
                     msgPos += recordLenLen + recordLen;
                     continue;
@@ -485,6 +642,7 @@ export class DeviceManager implements RaftDeviceMgrIF{
                         this._devicesState[deviceKey].deviceType = deviceTypeInfo.name || "";
                         this._devicesState[deviceKey].busName = busNum.toString();
                         this._devicesState[deviceKey].deviceAddress = devAddrHex;
+                        this.updateIdentityFields(deviceKey, busNum, true);
                     }
                 } else {
                     // Create device record - device type info may be undefined
@@ -509,6 +667,7 @@ export class DeviceManager implements RaftDeviceMgrIF{
                         deviceType: deviceTypeInfo?.name || "",
                         busName: busNum.toString()
                     };
+                    this.updateIdentityFields(deviceKey, busNum, false);
                 }
             }
 
@@ -562,9 +721,9 @@ export class DeviceManager implements RaftDeviceMgrIF{
                         if (newMsgBufIdx < 0)
                         {
                             this.warnMalformedSample(
-                                `${deviceKey}:${devTypeIdx}:DevbinV1Framed`,
+                                `${deviceKey}:${deviceTypeIndex}:DevbinV1Framed`,
                                 `DevMan.handleClientMsgBinary debugIdx ${debugMsgIndex} skipped malformed sample ` +
-                                `device=${deviceKey} devTypeIdx=${devTypeIdx} sampleLen=${sampleLen} respBytes=${pollRespMetadata.b}`
+                                `device=${deviceKey} devTypeIdx=${deviceTypeIndex} sampleLen=${sampleLen} respBytes=${pollRespMetadata.b}`
                             );
                             pollDataPos += sampleLen;
                             continue;
@@ -578,9 +737,9 @@ export class DeviceManager implements RaftDeviceMgrIF{
                     const fixedSampleLen = this.getDevbinV0FixedSampleLen(pollRespMetadata, pollDataPos, samplesEndPos);
                     if (fixedSampleLen <= 0) {
                         this.warnMalformedSample(
-                            `${deviceKey}:${devTypeIdx}:DevbinV0FixedLen`,
+                            `${deviceKey}:${deviceTypeIndex}:DevbinV0FixedLen`,
                             `DevMan.handleClientMsgBinary debugIdx ${debugMsgIndex} invalid DevbinV0Fixed sample length ` +
-                            `device=${deviceKey} devTypeIdx=${devTypeIdx} respBytes=${pollRespMetadata.b}`
+                            `device=${deviceKey} devTypeIdx=${deviceTypeIndex} respBytes=${pollRespMetadata.b}`
                         );
                     } else {
                         while (pollDataPos + fixedSampleLen <= samplesEndPos) {
@@ -603,9 +762,9 @@ export class DeviceManager implements RaftDeviceMgrIF{
                             if (newMsgBufIdx < 0)
                             {
                                 this.warnMalformedSample(
-                                    `${deviceKey}:${devTypeIdx}:DevbinV0Fixed`,
+                                    `${deviceKey}:${deviceTypeIndex}:DevbinV0Fixed`,
                                     `DevMan.handleClientMsgBinary debugIdx ${debugMsgIndex} skipped malformed DevbinV0Fixed sample ` +
-                                    `device=${deviceKey} devTypeIdx=${devTypeIdx} sampleLen=${fixedSampleLen} respBytes=${pollRespMetadata.b}`
+                                    `device=${deviceKey} devTypeIdx=${deviceTypeIndex} sampleLen=${fixedSampleLen} respBytes=${pollRespMetadata.b}`
                                 );
                                 pollDataPos += fixedSampleLen;
                                 continue;
@@ -617,9 +776,9 @@ export class DeviceManager implements RaftDeviceMgrIF{
 
                         if (pollDataPos < samplesEndPos) {
                             this.warnMalformedSample(
-                                `${deviceKey}:${devTypeIdx}:DevbinV0FixedRemainder`,
+                                `${deviceKey}:${deviceTypeIndex}:DevbinV0FixedRemainder`,
                                 `DevMan.handleClientMsgBinary debugIdx ${debugMsgIndex} skipped trailing DevbinV0Fixed sample bytes ` +
-                                `device=${deviceKey} devTypeIdx=${devTypeIdx} remaining=${samplesEndPos - pollDataPos} sampleLen=${fixedSampleLen} respBytes=${pollRespMetadata.b}`
+                                `device=${deviceKey} devTypeIdx=${deviceTypeIndex} remaining=${samplesEndPos - pollDataPos} sampleLen=${fixedSampleLen} respBytes=${pollRespMetadata.b}`
                             );
                         }
                     }
@@ -671,158 +830,24 @@ export class DeviceManager implements RaftDeviceMgrIF{
         // console.log(`DeviceManager client msg ${JSON.stringify(data)}`);
 
         // Iterate over the buses
-        Object.entries(data).forEach(([busName, devices]) => {
+        for (const [busName, devices] of Object.entries(data)) {
 
             // Check the bus name doesn't start with _ which is reserved for non-device information such as topic name
             if (busName.startsWith("_")) {
-                return;
+                continue;
             }
 
             // Check for bus status info
             if (devices && typeof devices === "object" && "_s" in devices) {
                 // console.log(`DeviceManager bus status ${JSON.stringify(devices._s)}`);
-                return;
+                continue;
             }
 
             // Iterate over the devices
-            Object.entries(devices).forEach(async ([devAddr, attrGroups]) => {
-
-                // Check for non-device info (starts with _)
-                if (devAddr.startsWith("_")) {
-                    return;
-                }
-
-                // Device type name
-                let deviceTypeName = "";
-                let deviceTypeIdx = -1;
-                if (attrGroups && typeof attrGroups === 'object' && "_t" in attrGroups && typeof attrGroups._t === "string") {
-                    deviceTypeName = attrGroups._t || "";
-                } else if (attrGroups && typeof attrGroups === 'object' && "_i" in attrGroups && typeof attrGroups._i === "number") {
-                    deviceTypeIdx = attrGroups._i ?? -1;
-                    deviceTypeName = deviceTypeIdx.toString();
-                } else
-                {
-                    console.warn(`DeviceManager missing device type attrGroups ${JSON.stringify(attrGroups)}`);
-                    return;
-                }
-
-                // Device key
-                const deviceKey = getDeviceKey(busName, devAddr);
-
-                // Update the last update time
-                this._deviceLastUpdateTime[deviceKey] = Date.now();
-
-                // Check if a device state already exists
-                if (!(deviceKey in this._devicesState) || (this._devicesState[deviceKey].deviceTypeInfo === undefined)) {
-
-                    // Try the per-device endpoint first (current firmware) and
-                    // fall back to the bus/type endpoint used by legacy
-                    // firmware and the simulator.
-                    const deviceTypeInfo = await this.getDeviceTypeInfoForMsg(deviceKey)
-                        ?? await this.getDeviceTypeInfoForMsg(busName, deviceTypeName);
-
-                    // Check if device record exists
-                    if (deviceKey in this._devicesState) {
-                        if (deviceTypeInfo !== undefined) {
-                            this._devicesState[deviceKey].deviceTypeInfo = deviceTypeInfo;
-                            this._devicesState[deviceKey].deviceType = deviceTypeName;
-                            this._devicesState[deviceKey].deviceAddress = devAddr;
-                            this._devicesState[deviceKey].busName = busName;
-                        }
-                    } else {
-                        // Create device record - device type info may be undefined
-                        this._devicesState[deviceKey] = {
-                            deviceTypeInfo: deviceTypeInfo,
-                            deviceTimeline: {
-                                timestampsUs: [],
-                                lastReportTimestampUs: 0,
-                                reportTimestampOffsetUs: 0,
-                                totalSamplesAdded: 0,
-                                emaLastSampleTimeUs: 0,
-                                emaIntervalUs: 0,
-                                emaPrevPollTimeUs: 0,
-                                emaCalibrated: false,
-                                emaCalibrationPolls: 0
-                            },
-                            deviceAttributes: {},
-                            deviceIsNew: true,
-                            stateChanged: false,
-                            onlineState: DeviceOnlineState.Online,
-                            deviceAddress: devAddr,
-                            deviceType: deviceTypeName,
-                            busName: busName
-                        };
-                    }
-                }
-
-                // Get device state
-                const deviceState = this._devicesState[deviceKey];
-
-                // Check for online/offline/pending-deletion state information
-                if (attrGroups && typeof attrGroups === "object" && "_o" in attrGroups) {
-                    const onlineStateVal = typeof attrGroups._o === 'number' ? attrGroups._o : parseInt(String(attrGroups._o), 10);
-                    if (onlineStateVal === 2) {
-                        // Pending deletion - remove device and skip further processing
-                        this.removeDevice(deviceKey);
-                        return;
-                    }
-                    deviceState.onlineState = onlineStateVal === 1 ? DeviceOnlineState.Online : DeviceOnlineState.Offline;
-                }
-
-                // Check if device type info is available
-                if (!deviceState.deviceTypeInfo) {
-                    return;
-                }
-
-                const markers = this.extractMarkers(attrGroups);
-
-                // Iterate attribute groups
-                Object.entries(attrGroups).forEach(([attrGroupName, msgHexStr]) => {
-
-                    // Check valid
-                    if (attrGroupName.startsWith("_") || (typeof msgHexStr != 'string')) {
-                        return;
-                    }
-
-                    // Check the device type info
-                    if (!deviceState.deviceTypeInfo!.resp) {
-                        return;
-                    }
-
-                    // Convert the hex string to an arraybuffer by converting each pair of hex chars to a byte
-                    const msgBytes = this.hexToBytes(msgHexStr);
-
-                    // Work through the message which may contain multiple data instances
-                    let msgBufIdx = 0;
-
-                    // Iterate over attributes in the group
-                    const pollRespMetadata = deviceState.deviceTypeInfo!.resp!;
-
-                    const attrLengthsBefore = this.snapshotAttrLengths(deviceState.deviceAttributes, pollRespMetadata);
-                    const timelineLenBefore = deviceState.deviceTimeline.timestampsUs.length;
-                    const totalSamplesBefore = deviceState.deviceTimeline.totalSamplesAdded;
-
-                    // Loop
-                    while (msgBufIdx < msgBytes.length) {
-
-                        const newMsgBufIdx = this._attributeHandler.processMsgAttrGroup(msgBytes, msgBufIdx,
-                            deviceState.deviceTimeline, pollRespMetadata,
-                            deviceState.deviceAttributes,
-                            this._maxDatapointsToStore);
-                        if (newMsgBufIdx < 0)
-                            break;
-                        msgBufIdx = newMsgBufIdx;
-                        deviceState.stateChanged = true;
-                    }
-
-                    this.emitDecodedData(deviceKey, busName, devAddr, deviceState, pollRespMetadata,
-                        attrLengthsBefore, timelineLenBefore, attrGroupName, markers);
-
-                    const newSamples = deviceState.deviceTimeline.totalSamplesAdded - totalSamplesBefore;
-                    this.updateDeviceStats(deviceKey, newSamples, Date.now());
-                });
-            });
-        });
+            for (const [devAddr, attrGroups] of Object.entries(devices)) {
+                await this.processClientMsgJsonDevice(busName, devAddr, attrGroups);
+            }
+        }
 
         // Check for devices that have not been updated for a while
         if (this._removeDevicesFlag) {
@@ -837,6 +862,156 @@ export class DeviceManager implements RaftDeviceMgrIF{
         
         // Process the callback
         this.processStateCallback();
+    }
+
+    // Process one device of a devjson message (devices are processed one at a time, in message order, as
+    // each may wait for a device type info lookup)
+    private async processClientMsgJsonDevice(busName: string, devAddr: string, attrGroups: DeviceMsgJsonElem): Promise<void> {
+
+        // Check for non-device info (starts with _)
+        if (devAddr.startsWith("_")) {
+            return;
+        }
+
+        // Device type key (_t, sent by older firmware) or device type index (_i) as a string
+        let deviceTypeKeyOrIndex = "";
+        let deviceTypeIndex = -1;
+        if (attrGroups && typeof attrGroups === 'object' && "_t" in attrGroups && typeof attrGroups._t === "string") {
+            deviceTypeKeyOrIndex = attrGroups._t || "";
+        } else if (attrGroups && typeof attrGroups === 'object' && "_i" in attrGroups && typeof attrGroups._i === "number") {
+            deviceTypeIndex = attrGroups._i ?? -1;
+            deviceTypeKeyOrIndex = deviceTypeIndex.toString();
+        } else
+        {
+            console.warn(`DeviceManager missing device type attrGroups ${JSON.stringify(attrGroups)}`);
+            return;
+        }
+
+        // Device key
+        const deviceKey = getDeviceKey(busName, devAddr);
+
+        // Update the last update time
+        this._deviceLastUpdateTime[deviceKey] = Date.now();
+
+        // Check if the device's type data needs resolving (new device, or its type has changed)
+        const { needsResolve, typeChanged } = this.noteRecordDeviceType(deviceKey, deviceTypeKeyOrIndex);
+        if (needsResolve) {
+
+            // Decode with the type data for this record's device type index (or type key from
+            // legacy firmware and the simulator). The per-device endpoint (current firmware) gives
+            // the per-instance name/role, and is the fallback for type data.
+            const perDeviceInfo = await this.getDeviceTypeInfoForMsg(deviceKey);
+            const indexTypeInfo = await this.getDeviceTypeInfoForMsg(busName, deviceTypeKeyOrIndex);
+            const deviceTypeInfo = indexTypeInfo ? this.withInstanceData(indexTypeInfo, deviceKey) : perDeviceInfo;
+            if (deviceTypeInfo !== undefined) {
+                this._deviceTypeIdSeen[deviceKey] = deviceTypeKeyOrIndex;
+            } else if (typeChanged && (deviceKey in this._devicesState)) {
+                // Never decode with the previous type's data
+                this._devicesState[deviceKey].deviceTypeInfo = undefined;
+            }
+
+            // Check if device record exists
+            if (deviceKey in this._devicesState) {
+                if (deviceTypeInfo !== undefined) {
+                    this._devicesState[deviceKey].deviceTypeInfo = deviceTypeInfo;
+                    this._devicesState[deviceKey].deviceType = deviceTypeKeyOrIndex;
+                    this._devicesState[deviceKey].deviceAddress = devAddr;
+                    this._devicesState[deviceKey].busName = busName;
+                    this.updateIdentityFields(deviceKey, this.busNumFromStr(busName), true);
+                }
+            } else {
+                // Create device record - device type info may be undefined
+                this._devicesState[deviceKey] = {
+                    deviceTypeInfo: deviceTypeInfo,
+                    deviceTimeline: {
+                        timestampsUs: [],
+                        lastReportTimestampUs: 0,
+                        reportTimestampOffsetUs: 0,
+                        totalSamplesAdded: 0,
+                        emaLastSampleTimeUs: 0,
+                        emaIntervalUs: 0,
+                        emaPrevPollTimeUs: 0,
+                        emaCalibrated: false,
+                        emaCalibrationPolls: 0
+                    },
+                    deviceAttributes: {},
+                    deviceIsNew: true,
+                    stateChanged: false,
+                    onlineState: DeviceOnlineState.Online,
+                    deviceAddress: devAddr,
+                    deviceType: deviceTypeKeyOrIndex,
+                    busName: busName
+                };
+                this.updateIdentityFields(deviceKey, this.busNumFromStr(busName), false);
+            }
+        }
+
+        // Get device state
+        const deviceState = this._devicesState[deviceKey];
+
+        // Check for online/offline/pending-deletion state information
+        if (attrGroups && typeof attrGroups === "object" && "_o" in attrGroups) {
+            const onlineStateVal = typeof attrGroups._o === 'number' ? attrGroups._o : parseInt(String(attrGroups._o), 10);
+            if (onlineStateVal === 2) {
+                // Pending deletion - remove device and skip further processing
+                this.removeDevice(deviceKey);
+                return;
+            }
+            deviceState.onlineState = onlineStateVal === 1 ? DeviceOnlineState.Online : DeviceOnlineState.Offline;
+        }
+
+        // Check if device type info is available
+        if (!deviceState.deviceTypeInfo) {
+            return;
+        }
+
+        const markers = this.extractMarkers(attrGroups);
+
+        // Iterate attribute groups
+        Object.entries(attrGroups).forEach(([attrGroupName, msgHexStr]) => {
+
+            // Check valid
+            if (attrGroupName.startsWith("_") || (typeof msgHexStr != 'string')) {
+                return;
+            }
+
+            // Check the device type info
+            if (!deviceState.deviceTypeInfo!.resp) {
+                return;
+            }
+
+            // Convert the hex string to an arraybuffer by converting each pair of hex chars to a byte
+            const msgBytes = this.hexToBytes(msgHexStr);
+
+            // Work through the message which may contain multiple data instances
+            let msgBufIdx = 0;
+
+            // Iterate over attributes in the group
+            const pollRespMetadata = deviceState.deviceTypeInfo!.resp!;
+
+            const attrLengthsBefore = this.snapshotAttrLengths(deviceState.deviceAttributes, pollRespMetadata);
+            const timelineLenBefore = deviceState.deviceTimeline.timestampsUs.length;
+            const totalSamplesBefore = deviceState.deviceTimeline.totalSamplesAdded;
+
+            // Loop
+            while (msgBufIdx < msgBytes.length) {
+
+                const newMsgBufIdx = this._attributeHandler.processMsgAttrGroup(msgBytes, msgBufIdx,
+                    deviceState.deviceTimeline, pollRespMetadata,
+                    deviceState.deviceAttributes,
+                    this._maxDatapointsToStore);
+                if (newMsgBufIdx < 0)
+                    break;
+                msgBufIdx = newMsgBufIdx;
+                deviceState.stateChanged = true;
+            }
+
+            this.emitDecodedData(deviceKey, busName, devAddr, deviceState, pollRespMetadata,
+                attrLengthsBefore, timelineLenBefore, attrGroupName, markers);
+
+            const newSamples = deviceState.deviceTimeline.totalSamplesAdded - totalSamplesBefore;
+            this.updateDeviceStats(deviceKey, newSamples, Date.now());
+        });
     }
 
     ////////////////////////////////////////////////////////////////////////////
@@ -882,6 +1057,9 @@ export class DeviceManager implements RaftDeviceMgrIF{
         delete this._devicesState[deviceKey];
         delete this._deviceLastUpdateTime[deviceKey];
         delete this._deviceStats[deviceKey];
+        delete this._deviceTypeIdSeen[deviceKey];
+        delete this._cachedDeviceTypeRecs[deviceKey];
+        delete this._cachedDeviceTypePreviousAttemptTimes[deviceKey];
     }
 
     ////////////////////////////////////////////////////////////////////////////
@@ -1001,6 +1179,7 @@ export class DeviceManager implements RaftDeviceMgrIF{
 
     private async executeDeviceTypeInfoRequest(deviceKeyOrBusName: string, deviceType: string | undefined, cacheKey: string): Promise<DeviceTypeInfo | undefined> {
         this._cachedDeviceTypePreviousAttemptTimes[cacheKey] = Date.now();
+        const generation = this._typeCacheGeneration;
 
         try {
             // Current firmware accepts the richer deviceid query with
@@ -1018,14 +1197,24 @@ export class DeviceManager implements RaftDeviceMgrIF{
                     // type record resolved via the per-device endpoint) cannot be used to
                     // decode attributes - treat it as not-found so callers fall back to
                     // the bus/type-index lookup instead of caching an empty record.
+                    // Instance data (name, role) belongs to the device ID, whatever its type
+                    if ((deviceType === undefined) && (generation === this._typeCacheGeneration)) {
+                        this._deviceInstanceData[deviceKeyOrBusName] = { name: msgRslt.name, role: msgRslt.role, displayName: msgRslt.displayName };
+                    }
                     if (!msgRslt.devinfo) {
                         return undefined;
                     }
                     // Merge devinfo (type-level) with top-level per-instance overrides (name, role)
                     const base: DeviceTypeInfo = { ...msgRslt.devinfo };
+                    base.typeDisplayName = msgRslt.devinfo.name;
+                    base.deviceTypeKey = msgRslt.deviceTypeKey ?? msgRslt.devinfo.type;
                     if (msgRslt.name !== undefined) base.name = msgRslt.name;
                     if (msgRslt.role !== undefined) base.role = msgRslt.role;
-                    this._cachedDeviceTypeRecs[cacheKey] = base;
+                    // A request started before the caches were cleared (e.g. before a reboot) may be for a
+                    // different meaning of the index, so it doesn't refill the cache
+                    if (generation === this._typeCacheGeneration) {
+                        this._cachedDeviceTypeRecs[cacheKey] = base;
+                    }
                     return base;
                 }
             }
@@ -1134,14 +1323,14 @@ export class DeviceManager implements RaftDeviceMgrIF{
         return (fixedSampleLen > 0) && (payloadLen > 0) && (payloadLen % fixedSampleLen === 0);
     }
 
-    private getBinaryDeviceKey(busNum: number, devAddrHex: string, devTypeIdx: number): string {
+    private getBinaryDeviceKey(busNum: number, devAddrHex: string, deviceTypeIndex: number): string {
         const baseDeviceKey = getDeviceKey(busNum.toString(), devAddrHex);
         // Direct-connect devices all report bus=0 addr=0 regardless of payload
         // format (DevbinV0Fixed and DevbinV1Framed alike), so distinct device
         // types would otherwise collide on the same "0_0" key. Disambiguate by
         // appending the device type index.
         if ((busNum === 0) && (devAddrHex === "0")) {
-            return `${baseDeviceKey}_${devTypeIdx}`;
+            return `${baseDeviceKey}_${deviceTypeIndex}`;
         }
         return baseDeviceKey;
     }
@@ -1225,12 +1414,6 @@ export class DeviceManager implements RaftDeviceMgrIF{
     // Send action to device
     ////////////////////////////////////////////////////////////////////////////
 
-    private toHex(data: Uint8Array): string {
-        return Array.from(data)
-            .map(byte => byte.toString(16).padStart(2, "0"))
-            .join("");
-    }
-
     ////////////////////////////////////////////////////////////////////////////
     // Raw I2C write + read via devman/cmdraw (requires firmware with rdData support)
     ////////////////////////////////////////////////////////////////////////////
@@ -1276,7 +1459,7 @@ export class DeviceManager implements RaftDeviceMgrIF{
             }
             const mappedHex = getActionMapHex(mapEntry);
             // Map values may contain &-separated multi-writes (e.g. "1048&114C&0a26")
-            const writes = mappedHex.split('&');
+            const writes = mappedHex.split('&').filter(hexWr => hexWr.length > 0);
             const { bus: devBus, addr: devAddr } = this.parseDeviceKeyForCommand(deviceKey);
             try {
                 const msgHandler = this._systemUtils?.getMsgHandler();
@@ -1293,37 +1476,13 @@ export class DeviceManager implements RaftDeviceMgrIF{
                 return false;
             }
         } else {
-            let writeBytes: Uint8Array;
-
-            // Check for one data item
-            if (data.length === 1) {
-
-                let value = data[0];
-
-                // Check for conversion
-                if (action.sub !== undefined) {
-                    value = value - action.sub;
-                }
-                if (action.mul !== undefined) {
-                    value = value * action.mul;
-                }
-
-                // Form the write bytes
-                writeBytes = action.t ? structPack(action.t, [value]) : new Uint8Array(0);
-
-            } else
-            {
-
-                // Form the write bytes which may have multiple data items
-                writeBytes = action.t ? structPack(action.t, data) : new Uint8Array(0);
+            const encoded = encodeActionWrite(action, data);
+            if (encoded === null) {
+                console.warn(`DeviceManager sendAction: can't encode ${data} for action ${action.n}`);
+                return false;
             }
-
-            // Convert to hex string
-            writeHexStr = this.toHex(writeBytes);
+            writeHexStr = encoded;
         }
-
-        // Add prefix and postfix
-        writeHexStr = (action.w ? action.w : "") + writeHexStr + (action.wz ? action.wz : "");
 
         // Parse the device key into bus and address components
         const { bus: devBus, addr: devAddr } = this.parseDeviceKeyForCommand(deviceKey);
@@ -1668,6 +1827,159 @@ export class DeviceManager implements RaftDeviceMgrIF{
         }
 
         this._decodedDataCallbacks.forEach((cb) => cb(decoded));
+    }
+
+    ////////////////////////////////////////////////////////////////////////////
+    // Device management (devman) endpoints - thin wrappers; each returns the firmware's response (rslt "ok" or
+    // "fail" with "error"), or undefined if there is no connection. deviceKey is the device ID (e.g. "1_68")
+    ////////////////////////////////////////////////////////////////////////////
+
+    private async devManCmd<T>(cmd: string): Promise<(RaftOKFail & T) | undefined> {
+        const msgHandler = this._systemUtils?.getMsgHandler();
+        if (!msgHandler) return undefined;
+        try {
+            return await msgHandler.sendRICRESTURL<RaftOKFail & T>(cmd);
+        } catch (error) {
+            console.warn(`DeviceManager ${cmd.split("?")[0]} error ${error}`);
+            return undefined;
+        }
+    }
+
+    // A device's display name: its device name if it has one, otherwise its type display name and its device ID
+    // (the firmware's displayName where it gives one; the same rule otherwise). name overrides the device name
+    public getDeviceDisplayName(deviceKey: string, name?: string): string {
+        if (name) return name;
+        const instanceData = this._deviceInstanceData[deviceKey];
+        if (instanceData?.name) return instanceData.name;
+        if (instanceData?.displayName) return instanceData.displayName;
+        const typeInfo = this._devicesState[deviceKey]?.deviceTypeInfo;
+        const typeName = typeInfo?.typeDisplayName || typeInfo?.deviceTypeKey;
+        return typeName ? `${typeName} ${deviceKey}` : deviceKey;
+    }
+
+    // Set the identity fields of a device's state (displayName, deviceName, deviceTypeKey, busNum) from its type
+    // data and instance data. For a known device a change of name is reported to the name changed callbacks
+    private updateIdentityFields(deviceKey: string, busNum: number | undefined, notify: boolean): void {
+        const state = this._devicesState[deviceKey];
+        if (!state) return;
+        const prevDisplayName = state.displayName;
+        const prevDeviceName = state.deviceName;
+        state.busNum = busNum;
+        state.deviceTypeKey = state.deviceTypeInfo?.deviceTypeKey ?? state.deviceTypeInfo?.type;
+        state.deviceName = this._deviceInstanceData[deviceKey]?.name ?? "";
+        state.displayName = this.getDeviceDisplayName(deviceKey);
+        if (notify && ((prevDisplayName !== state.displayName) || (prevDeviceName !== state.deviceName))) {
+            this._deviceNameChangedCallbacks.forEach((cb) => cb(deviceKey, state));
+        }
+    }
+
+    private busNumFromStr(busStr: string): number | undefined {
+        return /^\d+$/.test(busStr) ? parseInt(busStr, 10) : undefined;
+    }
+
+    // Apply a device name or role set from here to the cached data and the device's state, so it is seen without
+    // waiting for the type data to be requested again
+    private applyInstanceChange(deviceKey: string, change: { name?: string; role?: string }): void {
+        const instanceData = this._deviceInstanceData[deviceKey] ?? {};
+        if (change.name !== undefined) {
+            instanceData.name = change.name;
+            instanceData.displayName = change.name;
+        }
+        if ("role" in change) instanceData.role = change.role;
+        this._deviceInstanceData[deviceKey] = instanceData;
+        const cached = this._cachedDeviceTypeRecs[deviceKey];
+        if (cached) {
+            this._cachedDeviceTypeRecs[deviceKey] = { ...cached, ...change };
+        }
+        const state = this._devicesState[deviceKey];
+        if (state?.deviceTypeInfo) {
+            // The deprecated fields keep their meaning: the device name replaces the type display name
+            const prevName = state.deviceTypeInfo.name;
+            state.deviceTypeInfo = { ...state.deviceTypeInfo, ...change };
+            if ((change.name !== undefined) && (state.deviceType === prevName)) state.deviceType = change.name;
+        }
+        if (state) this.updateIdentityFields(deviceKey, state.busNum, true);
+    }
+
+    // Devices (with name, displayName, role and device type index)
+    public async listDevices(role?: string): Promise<(RaftOKFail & DevManListDevs) | undefined> {
+        return this.devManCmd<DevManListDevs>(`devman/listdevs${role ? `?role=${encodeURIComponent(role)}` : ""}`);
+    }
+
+    // Set a device's name (save: keep it over a restart)
+    public async setDeviceName(deviceKey: string, name: string, save = false): Promise<(RaftOKFail) | undefined> {
+        const rslt = await this.devManCmd<object>(`devman/setname?deviceid=${deviceKey}&name=${encodeURIComponent(name)}${save ? "&save=1" : ""}`);
+        if (rslt?.rslt === "ok") this.applyInstanceChange(deviceKey, { name });
+        return rslt;
+    }
+
+    // Set a device's role ("normal" for none; save: keep it over a restart)
+    public async setDeviceRole(deviceKey: string, role: string, save = false): Promise<(RaftOKFail) | undefined> {
+        const rslt = await this.devManCmd<object>(`devman/setrole?deviceid=${deviceKey}&role=${encodeURIComponent(role)}${save ? "&save=1" : ""}`);
+        // The firmware reports no role for "normal" (the default)
+        const roleSet = ((role === "") || (role.toLowerCase() === "normal")) ? undefined : role;
+        if (rslt?.rslt === "ok") this.applyInstanceChange(deviceKey, { role: roleSet });
+        return rslt;
+    }
+
+    // The device type table, a page at a time
+    public async getDeviceTypes(offset = 0, count = 50): Promise<(RaftOKFail & DevManTypes) | undefined> {
+        return this.devManCmd<DevManTypes>(`devman/types?offset=${offset}&count=${count}`);
+    }
+
+    // A device's identification state (state, attempts, candidates in the order they are tried)
+    public async getIdentInfo(deviceKey: string): Promise<(RaftOKFail & DevManIdentInfo) | undefined> {
+        return this.devManCmd<DevManIdentInfo>(`devman/identinfo?deviceid=${deviceKey}`);
+    }
+
+    // Identify devices again: all, those not identified, one device, or those identified as a type
+    public async reIdentify(scope: { all?: boolean; unidentified?: boolean; deviceKey?: string; type?: string }): Promise<(RaftOKFail & { buses?: number }) | undefined> {
+        let args = "";
+        if (scope.all) args = "all=1";
+        else if (scope.unidentified) args = "unidentified=1";
+        else if (scope.type !== undefined) args = `type=${encodeURIComponent(scope.type)}`;
+        else if (scope.deviceKey) args = `deviceid=${scope.deviceKey}`;
+        return this.devManCmd<{ buses?: number }>(`devman/reident?${args}`);
+    }
+
+    // Run a device's initialisation again (its devconfig settings are then applied again)
+    public async reInitDevice(deviceKey: string): Promise<(RaftOKFail & { queued?: boolean }) | undefined> {
+        return this.devManCmd<{ queued?: boolean }>(`devman/reinit?deviceid=${deviceKey}`);
+    }
+
+    // Stop or resume polling a device (kept while it is offline; save: keep it over a restart)
+    public async setDevicePolling(deviceKey: string, enabled: boolean, save = false): Promise<(RaftOKFail & DevManDevEnable) | undefined> {
+        return this.devManCmd<DevManDevEnable>(`devman/devenable?deviceid=${deviceKey}&poll=${enabled ? 1 : 0}${save ? "&save=1" : ""}`);
+    }
+
+    // Set a device type's policy now (save: also in the device type file, applied by a restart)
+    public async setTypePolicy(type: string, policy: DevManTypePolicy, save = false): Promise<(RaftOKFail & { restartRequired?: boolean }) | undefined> {
+        return this.devManCmd<{ restartRequired?: boolean }>(`devman/typepolicy?type=${encodeURIComponent(type)}&policy=${policy}${save ? "&save=1" : ""}`);
+    }
+
+    // Device type file status (restartRequired: the file has changed since it was loaded)
+    public async getTypeFileStatus(entries = false): Promise<(RaftOKFail & DevManTypeFileStatus) | undefined> {
+        return this.devManCmd<DevManTypeFileStatus>(`devman/typefile${entries ? "?entries=1" : ""}`);
+    }
+
+    // What a device type file on the device would do at the next startup, entry by entry, without changing anything
+    // (default: the device type file itself)
+    public async checkTypeFile(file?: string): Promise<(RaftOKFail & DevManTypeFileCheck) | undefined> {
+        return this.devManCmd<DevManTypeFileCheck>(`devman/typefile/check${file ? `?file=${encodeURIComponent(file)}` : ""}`);
+    }
+
+    // Restart the device to apply its device type file. With file (e.g. one just uploaded as /local/devlib.new.json),
+    // that file is checked first and becomes the device type file only if nothing in it is rejected (otherwise the
+    // response is rslt "fail", error "failCheck", with the check's fields)
+    public async applyTypeFile(file?: string): Promise<(RaftOKFail & DevManTypeFileCheck & { restarting?: boolean }) | undefined> {
+        return this.devManCmd<DevManTypeFileCheck & { restarting?: boolean }>(
+            `devman/typefile/apply${file ? `?file=${encodeURIComponent(file)}` : ""}`);
+    }
+
+    // Addresses device type records identify devices at
+    public async getReservedAddresses(): Promise<string[] | undefined> {
+        const rslt = await this.devManCmd<{ addrs?: string[] }>("devman/reserved");
+        return rslt?.rslt === "ok" ? rslt.addrs ?? [] : undefined;
     }
 
     private extractMarkers(attrGroups: any): Record<string, unknown> {

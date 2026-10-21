@@ -87,7 +87,7 @@ export default function LogFilesPanel({ refreshTrigger, onDownloadActiveChange }
 
       if (result.downloadedOk && result.fileData) {
         // Trigger browser download
-        const blob = new Blob([result.fileData], { type: 'application/octet-stream' });
+        const blob = new Blob([result.fileData as Uint8Array<ArrayBuffer>], { type: 'application/octet-stream' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;

@@ -2,7 +2,6 @@ import React, { useState } from 'react';
 import DispOneLED from './DispOneLed';
 import ConnManager from './ConnManager';
 import { DeviceTypeAction } from '../../../src/RaftDeviceInfo';
-import { CirclePicker } from 'react-color';
 
 const connManager = ConnManager.getInstance();
 
@@ -35,6 +34,34 @@ const customColors = [
     '#FF6347', // tomato
     // Add more custom colors as needed
   ];
+
+// Row of colour swatches (laid out like react-color's CirclePicker) with the current colour ringed
+const ColourSwatches: React.FC<{ colours: string[]; selected: string; onSelect: (colour: string) => void }> = ({ colours, selected, onSelect }) => (
+  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '14px', width: '252px', marginTop: '14px' }}>
+    {colours.map((colour) => {
+      const isSelected = colour.toLowerCase() === selected.toLowerCase();
+      return (
+        <button
+          key={colour}
+          type="button"
+          title={colour}
+          aria-label={colour}
+          onClick={() => onSelect(colour)}
+          style={{
+            width: '28px',
+            height: '28px',
+            padding: 0,
+            borderRadius: '50%',
+            border: 'none',
+            cursor: 'pointer',
+            background: colour,
+            boxShadow: isSelected ? `inset 0 0 0 3px ${colour}, inset 0 0 0 6px #fff` : `inset 0 0 0 14px ${colour}, 0 0 0 1px #888`,
+          }}
+        />
+      );
+    })}
+  </div>
+);
   
 const DispLEDGrid: React.FC<LEDGridProps> = ({ rows, cols, deviceKey, deviceAction }) => {
   // Initialize the grid with all LEDs turned off (black)
@@ -54,12 +81,12 @@ const DispLEDGrid: React.FC<LEDGridProps> = ({ rows, cols, deviceKey, deviceActi
     return [r, g, b];
   };
 
-  const handleChangeComplete = (color: any) => {
+  const handleColourSelect = (colour: string) => {
     if (activeLED) {
       const { row, col } = activeLED;
       const newColors = colors.map((rowColors, rowIndex) =>
         rowColors.map((colColor, colIndex) =>
-          rowIndex === row && colIndex === col ? color.hex : colColor
+          rowIndex === row && colIndex === col ? colour : colColor
         )
       );
       setColors(newColors);
@@ -97,10 +124,10 @@ const DispLEDGrid: React.FC<LEDGridProps> = ({ rows, cols, deviceKey, deviceActi
         )}
       </div>
       {activeLED && (
-        <CirclePicker 
-          color={colors[activeLED.row][activeLED.col]}
-          colors={customColors}
-          onChangeComplete={handleChangeComplete}
+        <ColourSwatches
+          colours={customColors}
+          selected={colors[activeLED.row][activeLED.col]}
+          onSelect={handleColourSelect}
         />
       )}
     </div>

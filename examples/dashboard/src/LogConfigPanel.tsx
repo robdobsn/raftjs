@@ -188,7 +188,7 @@ export default function LogConfigPanel({ onConfigChanged, disabled, cameraAvaila
         enabled: existing?.enabled ?? true,
         busName: ds.busName,
         addr: ds.deviceAddress,
-        typeName: ds.deviceTypeInfo?.name ?? ds.deviceType ?? 'Unknown',
+        typeName: ds.deviceTypeInfo?.typeDisplayName ?? ds.deviceTypeInfo?.name ?? ds.deviceType ?? 'Unknown',
         rateMs: existing?.rateMs ?? 10000,
         pollIntervalMs,
         availableAttrs,

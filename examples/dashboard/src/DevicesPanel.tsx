@@ -18,6 +18,26 @@ const connManager = ConnManager.getInstance();
 // so this only paces the live value display and remains visually smooth.
 const REFRESH_INTERVAL_MS = 150;
 
+// Slot number from an I2C style address (slot in the second byte, address in the low byte), or
+// Infinity for devices with no slot so they come after the slotted ones
+function deviceSlot(state: DeviceState): number {
+    const addrInt = parseInt(state.deviceAddress, 16);
+    if (!state.deviceAddress || !Number.isFinite(addrInt) || addrInt === 0 || addrInt >= 65536) return Infinity;
+    return addrInt >> 8;
+}
+
+function isSystemDevice(state: DeviceState): boolean {
+    return state.deviceTypeInfo?.role?.toLowerCase() === "system";
+}
+
+// Order devices with system devices last, then by slot, then by address
+function compareDevices([keyA, a]: [string, DeviceState], [keyB, b]: [string, DeviceState]): number {
+    return (Number(isSystemDevice(a)) - Number(isSystemDevice(b)))
+        || (deviceSlot(a) === deviceSlot(b) ? 0 : deviceSlot(a) < deviceSlot(b) ? -1 : 1)
+        || ((parseInt(a.deviceAddress, 16) || 0) - (parseInt(b.deviceAddress, 16) || 0))
+        || keyA.localeCompare(keyB);
+}
+
 export class DevicesPanelProps {
     constructor(
     ) { }
@@ -85,7 +105,7 @@ export default function DevicesPanel(props: DevicesPanelProps) {
     
     return (
         <div className="devices-container">
-        {Object.entries(devicesState).filter(([key, _]) => key !== 'getDeviceKey').map(([deviceKey, data]) => (
+        {Object.entries(devicesState).filter(([key, _]) => key !== 'getDeviceKey').sort(compareDevices).map(([deviceKey]) => (
             <DevicePanel key={deviceKey} deviceKey={deviceKey} lastUpdated={lastUpdated} />
         ))}
       </div>

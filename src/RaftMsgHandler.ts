@@ -109,18 +109,28 @@ export default class RaftMsgHandler {
     }
 
     // Timer for checking messages
-    setTimeout(async () => {
+    RaftMsgHandler._startHousekeepingTimer(() => {
       this._onMsgTrackTimer(true);
     }, this._msgTrackTimerMs);
 
     // Periodic comms-stats summary timer
-    setTimeout(() => {
+    RaftMsgHandler._startHousekeepingTimer(() => {
       this._onStatsLogTimer(true);
     }, this._statsLogTimerMs);
 
     // HDLC used to encode/decode the RICREST protocol
     this._miniHDLC = new RaftMiniHDLC();
     this._miniHDLC.setOnRxFrame(this._onHDLCFrameDecode.bind(this));
+  }
+
+  // Start a timer for periodic housekeeping (message tracking, stats logging). These timers re-arm themselves
+  // for the life of the handler, so in Node they are unref'd: they must not keep a process (a script or a test
+  // run) alive on their own. Browsers and React Native have no unref and are unaffected
+  private static _startHousekeepingTimer(callback: () => void, delayMs: number): void {
+    const timer = setTimeout(callback, delayMs) as unknown as { unref?: () => void };
+    if (timer && typeof timer.unref === "function") {
+      timer.unref();
+    }
   }
 
   private _onStatsLogTimer(chainRecall: boolean): void {
@@ -134,7 +144,7 @@ export default class RaftMsgHandler {
       this._statsLogLastRxCount = rxCount;
     }
     if (chainRecall) {
-      setTimeout(() => {
+      RaftMsgHandler._startHousekeepingTimer(() => {
         this._onStatsLogTimer(true);
       }, this._statsLogTimerMs);
     }
@@ -730,7 +740,7 @@ export default class RaftMsgHandler {
 
     // Call again if required
     if (chainRecall) {
-      setTimeout(async () => {
+      RaftMsgHandler._startHousekeepingTimer(() => {
         this._onMsgTrackTimer(true);
       }, this._msgTrackTimerMs);
     }

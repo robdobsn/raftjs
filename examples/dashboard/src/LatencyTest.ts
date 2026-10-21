@@ -43,6 +43,7 @@ class LatencyTest {
   processAttrValues(attribute: DeviceAttributeState, timestamp: number): void {
     for (let i = 0; i < attribute.numNewValues; i++) {
       const newValue = attribute.values[attribute.values.length - attribute.numNewValues + i];
+      if (typeof newValue !== 'number') continue;
       // console.log(`New value: ${newValue} prev value: ${this.lastAttrValue}`);
       if (this.lastAttrValue === null) {
         this.lastAttrValue = newValue;

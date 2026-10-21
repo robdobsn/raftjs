@@ -7,6 +7,8 @@
 //
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+import { structPack } from "./RaftStruct";
+
 const attrTypeBits: { [key: string]: number } = {
     "c": 8, "b": 8, "B": 8, "?": 8,
     "h": 16, "H": 16, ">h": 16, "<h": 16, ">H": 16, "<H": 16,
@@ -71,11 +73,25 @@ export function getAttrElemsPerSample(attrType: string): number {
     return total > 0 ? total : 1;
 }
 
+const UNITS_NAMED_ENTITIES: Record<string, string> = {
+    deg: "°", micro: "µ", ohm: "Ω", Omega: "Ω", omega: "ω",
+    Alpha: "Α", alpha: "α", Beta: "Β", beta: "β", Gamma: "Γ", gamma: "γ",
+    Delta: "Δ", delta: "δ", epsilon: "ε", theta: "θ", lambda: "λ", mu: "μ",
+    pi: "π", rho: "ρ", Sigma: "Σ", sigma: "σ", tau: "τ", phi: "φ", Phi: "Φ",
+    plusmn: "±", times: "×", divide: "÷", middot: "·", permil: "‰",
+    sup1: "¹", sup2: "²", sup3: "³", frac12: "½", frac14: "¼", frac34: "¾",
+    percnt: "%", sol: "/", amp: "&", lt: "<", gt: ">", quot: "\"", apos: "'", nbsp: "\u00a0",
+};
+
 export function decodeAttrUnitsEncoding(unitsEncoding: string): string {
-    // Replace instances of HTML encoded chars like &deg; with the actual char
-    return unitsEncoding
-        .replace(/&deg;/g, "°")
-        .replace(/&micro;/g, "µ");
+    // Replace HTML encoded chars like &deg;, &Omega;, &#937; or &#x3A9; with the actual char
+    return unitsEncoding.replace(/&(#[xX][0-9a-fA-F]+|#[0-9]+|[A-Za-z][A-Za-z0-9]*);/g, (match, ent: string) => {
+        if (ent[0] === "#") {
+            const code = (ent[1] === "x" || ent[1] === "X") ? parseInt(ent.slice(2), 16) : parseInt(ent.slice(1), 10);
+            return Number.isFinite(code) && code > 0 && code <= 0x10FFFF ? String.fromCodePoint(code) : match;
+        }
+        return UNITS_NAMED_ENTITIES[ent] ?? match;
+    });
 }
 
 export interface LUTRow {
@@ -106,6 +122,8 @@ export interface DeviceTypeAttribute {
     vf?: boolean | number;          // Display attribute value in the device info panel
     vft?: string;                   // Attribute validity based on the value of another named attribute
     lut?: Array<LUTRow>;            // Lookup table for the attribute value - each row is a lookup table for a range of values e.g. [{"r":"0x20-0x30","v":0},{"r":"1,2,3","v":42},{r:"","v":1}]
+    vl?: Record<string, string>;    // Value labels - display text for enumerated values, keyed by the decoded value e.g. {"1":"OK","2":"low"}
+    bl?: Record<string, string>;    // Bit labels - display text for flag bits, keyed by bit mask e.g. {"0x04":"VL","0x10":"HD"}; "0" labels a value of 0
     resolution?: string;            
 }
 
@@ -132,7 +150,8 @@ export interface SampleRateResult {
 }
 
 export interface ActionMapEntry {
-    w: string;                      // Hex bytes to write (may contain &-separated multi-writes)
+    w?: string;                     // Hex bytes to write (may contain &-separated multi-writes). A _conf.rate entry
+                                    // may omit it: the rate then only sets the polling (i, s)
     i?: number;                     // Recommended polling interval in microseconds
     s?: number;                     // Recommended number of poll result samples (buffer depth)
 }
@@ -140,11 +159,80 @@ export interface ActionMapEntry {
 export type ActionMapValue = string | ActionMapEntry;
 
 export function getActionMapHex(entry: ActionMapValue): string {
-    return typeof entry === 'string' ? entry : entry.w;
+    return typeof entry === 'string' ? entry : (entry.w ?? "");
 }
 
 export function getActionMapEntry(entry: ActionMapValue): ActionMapEntry | null {
     return typeof entry === 'object' ? entry : null;
+}
+
+/** Sensirion CRC-8 (polynomial 0x31, initial value 0xFF) of a 2-byte word */
+export function sensirionCrc8(msb: number, lsb: number): number {
+    let crc = 0xff;
+    for (const byte of [msb, lsb]) {
+        crc ^= byte;
+        for (let bit = 0; bit < 8; bit++) {
+            crc = (crc & 0x80) ? ((crc << 1) ^ 0x31) & 0xff : (crc << 1) & 0xff;
+        }
+    }
+    return crc;
+}
+
+/** Whether an action type is a single integer value (e.g. "B", ">H", "<i") */
+export function isIntegerActionType(actionType: string): boolean {
+    return /^[<>!=@]?[bBhHiIlLqQ]$/.test(actionType);
+}
+
+/**
+ * The step for entering an action's value: the resolution the device takes. An integer type with mul (e.g. a
+ * temperature offset in units of 0.01 degrees, mul 100) takes steps of 1/mul; without mul, whole numbers.
+ * Other types (e.g. a float) take any value: "any"
+ */
+export function getActionInputStep(action: DeviceTypeAction): number | "any" {
+    if (!action.t || !isIntegerActionType(action.t)) {
+        return "any";
+    }
+    const mul = action.mul !== undefined && action.mul > 0 ? action.mul : 1;
+    return 1 / mul;
+}
+
+/**
+ * The hex bytes an action writes for the given data (an action without a map): the value(s) after sub and mul,
+ * packed with t, then crc check bytes if the action has them, between the w prefix and the wz suffix.
+ * Returns null if the data can't be encoded (crc8w needs whole 2-byte words)
+ */
+export function encodeActionWrite(action: DeviceTypeAction, data: number[]): string | null {
+    let writeBytes: Uint8Array;
+    if (data.length === 1) {
+        let value = data[0];
+        if (action.sub !== undefined) {
+            value = value - action.sub;
+        }
+        if (action.mul !== undefined) {
+            value = value * action.mul;
+        }
+        // Round for an integer type: packing truncates, and e.g. 0.29 * 100 is 28.999999999999996
+        if (action.t && isIntegerActionType(action.t)) {
+            value = Math.round(value);
+        }
+        writeBytes = action.t ? structPack(action.t, [value]) : new Uint8Array(0);
+    } else {
+        writeBytes = action.t ? structPack(action.t, data) : new Uint8Array(0);
+    }
+    if (action.crc === "crc8w") {
+        if (writeBytes.length % 2 !== 0) {
+            return null;
+        }
+        const withCrc: number[] = [];
+        for (let i = 0; i < writeBytes.length; i += 2) {
+            withCrc.push(writeBytes[i], writeBytes[i + 1], sensirionCrc8(writeBytes[i], writeBytes[i + 1]));
+        }
+        writeBytes = new Uint8Array(withCrc);
+    } else if (action.crc !== undefined) {
+        return null;
+    }
+    const hex = Array.from(writeBytes).map((b) => b.toString(16).padStart(2, "0")).join("");
+    return (action.w ? action.w : "") + hex + (action.wz ? action.wz : "");
 }
 
 export interface DeviceTypeAction {
@@ -152,6 +240,7 @@ export interface DeviceTypeAction {
     t?: string;                     // Action type using python struct module format (e.g. 'H' for unsigned short, 'h' for signed short, 'f' for float etc.)
     w: string;                      // Prefix to write to cmd API
     wz?: string;                    // Postfix to write to cmd API
+    crc?: string;                   // Check bytes added to the encoded value: "crc8w" - a Sensirion CRC-8 after each 2-byte word
     r?: number[];                   // Range of valid values for the action
     f?: string;                     // Custom formatting options (e.g. LEDPIX for LED pixel grid)
     NX?: number;                    // Number of X in the LED pixel grid
@@ -166,7 +255,15 @@ export interface DeviceTypeAction {
 }
 
 export interface DeviceTypeInfo {
+    /**
+     * @deprecated The type display name, or the device name if one is assigned (it overwrites it) - use
+     * typeDisplayName, or DeviceState.displayName / deviceName. Kept with its current meaning until a major version
+     */
     name: string;
+    /** The type display name (devInfoJson.name), never replaced by the device name */
+    typeDisplayName?: string;
+    /** The device type key (from the firmware's deviceTypeKey, or devInfoJson.type for older firmware) */
+    deviceTypeKey?: string;
     desc: string;
     manu: string;
     type: string;
@@ -185,6 +282,8 @@ export type RaftDevTypeInfoResponse = {
     rslt: string;
     devinfo?: DeviceTypeInfo;
     dtIdx?: number;
+    deviceTypeKey?: string;     // device type key of the record (firmware from 2026-10-15)
+    displayName?: string;       // name to show for the device (per-device lookup, firmware from 2026-10-16)
     name?: string;
     role?: string;
   };

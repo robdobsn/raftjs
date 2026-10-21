@@ -6,7 +6,8 @@
     "module": "esnext",
     "target": "es2017",
     "strict": true,
-    "moduleResolution": "node",
+    "moduleResolution": "bundler",
+    "moduleSuffixes": [".web", ""],
     "lib": [
       "ES2017",
       "DOM"

@@ -34,7 +34,7 @@ const SpectrumChart: React.FC<DeviceVisualizerProps> = memo(({ deviceKey, attrib
     const labels = attribute.el ?? latestSample.map((_, i) => String(i));
 
     const valueUnits = attrState.units || '';
-    const elemUnits = attribute.eu || '';
+    const elemUnits = attrState.elemUnits || '';
 
     const data = {
         labels,

@@ -85,6 +85,32 @@ Over a WiFi connection the device is generally unresponsive while it scans, so p
 may not arrive and the results appear when the scan ends. See `RaftWifiScanOptions` and
 `RaftWifiScanOutcome` in `src/RaftTypes.ts`, and `WifiScanPanel.tsx` in the dashboard example.
 
+## Devices
+
+`connector.getSystemType()?.deviceMgrIF` / `DeviceManager` keeps the state of every device the firmware publishes
+(`getDevicesState()`), decoded from `devbin` or `devjson`. To show a device, use `DeviceState.displayName`. Use
+`deviceTypeKey` to tell types apart, and `busNum` for the bus. `DeviceTypeInfo.name`, `DeviceState.deviceType` and
+`busName` are deprecated (see [devdocs/device-identity-fields.md](devdocs/device-identity-fields.md)).
+
+Wrappers for the firmware's device management endpoints (each returns the firmware's response):
+
+```ts
+const devMan = connector.getSystemType()?.deviceMgrIF as RaftDeviceManager;
+await devMan.listDevices();                          // deviceid, name, displayName, role, dtIdx
+await devMan.setDeviceName("1_68", "Arm IMU", true); // save=true keeps it over a restart
+await devMan.setDevicePolling("1_68", false);        // stop polling (the device stays identified)
+await devMan.reInitDevice("1_68");                   // run its initialisation again
+await devMan.getIdentInfo("1_68");                   // identification state and candidates
+await devMan.reIdentify({ unidentified: true });     // or { all }, { deviceKey }, { type }
+await devMan.setTypePolicy("APDS9960", "disabled");  // save=true also writes the device type file
+await devMan.getDeviceTypes(0, 50);                  // the device type table
+await devMan.getTypeFileStatus(true);                // restartRequired after a type file change; entries
+await devMan.checkTypeFile("/local/devlib.new.json"); // what an uploaded type file would do, per entry
+await devMan.applyTypeFile("/local/devlib.new.json"); // check, use it as the type file and restart
+```
+
+`addDeviceNameChangedCallback()` reports when a device's name or display name changes.
+
 ## Testing
 
 | What | How |
