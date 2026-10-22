@@ -10,7 +10,7 @@
 import { DeviceAttributeState, DeviceAttributesState, DevicesState, DeviceState, DeviceStats, DeviceOnlineState, formatDeviceAddrHex, getDeviceKey, parseDeviceKey } from "./RaftDeviceStates";
 import { DeviceMsgJson, DeviceMsgJsonElem } from "./RaftDeviceMsg";
 import { RaftOKFail } from './RaftTypes';
-import { DeviceTypeInfo, DeviceTypeAction, DeviceTypeInfoRecs, DeviceTypePollRespMetadata, RaftDevTypeInfoResponse, SampleRateResult, getActionMapHex, encodeActionWrite } from "./RaftDeviceInfo";
+import { DeviceTypeInfo, DeviceTypeAction, DeviceTypeInfoRecs, DeviceTypePollRespMetadata, RaftDevTypeInfoResponse, DeviceDecoderKind, SampleRateResult, getActionMapHex, encodeActionWrite } from "./RaftDeviceInfo";
 import AttributeHandler from "./RaftAttributeHandler";
 import RaftSystemUtils from "./RaftSystemUtils";
 import RaftDeviceMgrIF from "./RaftDeviceMgrIF";
@@ -84,16 +84,35 @@ export interface DevManTypeFileEntry {
     error?: string;
     warnings?: string;
     noDecoder?: boolean;        // has data but no on-device decoder (raftjs decodes it; DataLogger, RaftROS don't)
-    decoder?: "compiled" | "runtime" | "none";  // where its on-device decoder comes from (firmware with runtime decoding)
+    decoder?: DeviceDecoderKind;    // where its on-device decoder comes from (firmware with runtime decoding)
 }
 
 export interface DevManTypeFileStatus {
     file?: string;
-    state?: string;
+    state?: "none" | "missing" | "error" | "applied" | "loading";
     present?: boolean;
+    applied?: boolean;          // something from the file is in effect
     crc?: string;
-    restartRequired?: boolean;
+    added?: number;
+    replaced?: number;
+    unchanged?: number;
+    disabled?: number;
+    rejected?: number;
+    warnings?: number;
     firstError?: string;
+    firstWarning?: string;
+    records?: number;           // extended records in use (from the file and static devices) and their limits
+    maxRecords?: number;
+    bytes?: number;
+    maxBytes?: number;
+    runtimeDecoders?: "onIdentify" | "atLoad" | "off";  // when runtime decoders are made (firmware from 2026-10-22)
+    decoders?: number;          // runtime decoders made
+    decodersFailed?: number;    // runtime decoders that couldn't be made when needed
+    decoderBytes?: number;
+    maxDecoderBytes?: number;   // -1: no limit
+    maxFileBytes?: number;
+    identReady?: boolean;       // devices are being identified (the file has been loaded, or its timeout passed)
+    restartRequired?: boolean;
     entries?: DevManTypeFileEntry[];    // with getTypeFileStatus(true)
 }
 

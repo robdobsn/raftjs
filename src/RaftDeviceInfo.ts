@@ -277,6 +277,12 @@ export interface DeviceTypeInfoRecs {
     [devType: string]: DeviceTypeInfo;
 }
 
+// Where a device type's on-device poll decoder comes from (firmware with runtime decoding): compiled into the
+// firmware, made at runtime from the record's attributes, made when a device of the type is first identified
+// (runtimePending - firmware from 2026-10-22), couldn't be made when it was needed (runtimeFailed), or none - only
+// clients such as raftjs decode its data
+export type DeviceDecoderKind = "compiled" | "runtime" | "runtimePending" | "runtimeFailed" | "none";
+
 export type RaftDevTypeInfoResponse = {
     req: string;
     rslt: string;
@@ -286,4 +292,6 @@ export type RaftDevTypeInfoResponse = {
     displayName?: string;       // name to show for the device (per-device lookup, firmware from 2026-10-16)
     name?: string;
     role?: string;
+    decoder?: DeviceDecoderKind;
+    decoderProblem?: string;    // why the decoder couldn't be made (decoder runtimeFailed)
   };
