@@ -1,24 +1,33 @@
-# name: Lint and test
+name: Lint and test
 
-# on: [push, pull_request]
+on:
+  push:
+    branches: [main]
+  pull_request:
 
-# jobs:
-#   build_and_test:
-#     runs-on: ubuntu-latest
-#     strategy:
-#       fail-fast: false
-#       matrix:
-#         nodejs: [12, 14, 16, 17]
+permissions:
+  contents: read
 
-#     steps:
-#     - uses: actions/checkout@v2
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
 
-#     # https://github.com/actions/setup-node
-#     - uses: actions/setup-node@v2-beta
-#       with:
-#         node-version: ${{ matrix.nodejs }}
+      - name: Setup Node.js (the version in .nvmrc)
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+          cache: 'npm'
 
-#     - run: npm install
-#     - run: npm run test
-#     - run: npm run lint
-#     - run: npm run build-all
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Test
+        run: npm test -- --ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build (web and React Native)
+        run: npm run build-all

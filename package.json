@@ -26,6 +26,7 @@
         "build:phone": "tsc -p tsconfig.react-native.json",
         "build-all": "npm run clean && npm run build && npm run build:phone",
         "lint": "eslint ./src",
+        "test": "jest",
         "clean": "rimraf dist build package",
         "docs": "typedoc --entryPoints src/main.ts",
         "watch-all": "tsc -p tsconfig.json --watch & tsc -p tsconfig.react-native.json --watch",
