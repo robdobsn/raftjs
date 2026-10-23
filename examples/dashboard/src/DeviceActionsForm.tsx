@@ -15,13 +15,28 @@ function findClosest(arr: number[], target: number): number {
     );
 }
 
-function getDefaultActionValue(action: DeviceTypeAction): number {
+// Map keys in display order: numeric keys (e.g. rates) ascending, label keys (e.g. "raw", "on") as listed
+function getMapKeys(map: Record<string, unknown>): string[] {
+    const keys = Object.keys(map);
+    const allNumeric = keys.every((key) => key.trim() !== '' && Number.isFinite(Number(key)));
+    return allNumeric ? keys.sort((a, b) => Number(a) - Number(b)) : keys;
+}
+
+// The map key selected by default: the one matching d, else the first
+function getDefaultMapKey(action: DeviceTypeAction): string {
+    const mapKeys = action.map ? getMapKeys(action.map) : [];
+    if (action.d !== undefined && mapKeys.includes(String(action.d))) {
+        return String(action.d);
+    }
+    return mapKeys[0] ?? '';
+}
+
+function getDefaultActionValue(action: DeviceTypeAction): number | string {
+    if (action.map) {
+        return getDefaultMapKey(action);
+    }
     if (action.d !== undefined) {
         return action.d;
-    }
-    if (action.map) {
-        const firstMapKey = Object.keys(action.map).sort((a, b) => parseFloat(a) - parseFloat(b))[0];
-        return firstMapKey !== undefined ? parseFloat(firstMapKey) : 0;
     }
     if (action.r && action.r.length > 1) {
         return (action.r[1] + action.r[0]) / 2;
@@ -33,8 +48,9 @@ type DeviceActionsTableProps = {
     deviceKey: string;
 };
 
+// A number for a value action, the map key for an action with a map
 interface InputValues {
-    [key: string]: number;
+    [key: string]: number | string;
 }
 
 const DeviceActionsForm: React.FC<DeviceActionsTableProps> = ({ deviceKey }: DeviceActionsTableProps) => {
@@ -104,7 +120,7 @@ const DeviceActionsForm: React.FC<DeviceActionsTableProps> = ({ deviceKey }: Dev
                                 }
                             }
                             if (bestKey) {
-                                initialValues['_conf.rate'] = parseFloat(bestKey);
+                                initialValues['_conf.rate'] = bestKey;
                             }
                         } else {
                             // For generic rate dropdown: find closest option
@@ -120,22 +136,22 @@ const DeviceActionsForm: React.FC<DeviceActionsTableProps> = ({ deviceKey }: Dev
         }, 1000);
     }, [deviceKey]);
 
-    const handleInputChange = (name: string, value: number) => {
+    const handleInputChange = (name: string, value: number | string) => {
         setInputValues((prevValues: any) => ({
             ...prevValues,
             [name]: value,
         }));
     };
 
-    const handleSendAction = async (action: DeviceTypeAction, value: number) => {
-        // Send action to device
-        if (!deviceManager || !Number.isFinite(value)) {
+    const handleSendAction = async (action: DeviceTypeAction, value: number | string) => {
+        // Send action to device - a map action sends its key, any other action a number
+        if (!deviceManager || (typeof value === 'number' ? !Number.isFinite(value) : value === '')) {
             return;
         }
         // For _conf.rate actions, use setSampleRate for coordinated polling config
         if (action.n === '_conf.rate' && action.map) {
             setActionStatus('Setting sample rate...');
-            const result = await deviceManager.setSampleRate(deviceKey, value);
+            const result = await deviceManager.setSampleRate(deviceKey, Number(value));
             if (result.ok) {
                 setActionStatus(`Rate: ${result.actualRateHz} Hz, poll: ${result.intervalUs} µs, buf: ${result.numSamples}`);
             } else {
@@ -191,27 +207,22 @@ const DeviceActionsForm: React.FC<DeviceActionsTableProps> = ({ deviceKey }: Dev
                                 </tr>
                             );
                         } else if (action.map) {
-                            const mapKeys = Object.keys(action.map).sort((a, b) => parseFloat(a) - parseFloat(b));
+                            const mapKeys = getMapKeys(action.map);
                             // Label: "Rate Hz" for _conf.rate, the description for other _conf.* settings (their names
                             // aren't readable), otherwise the action name - the description is shown on hover
                             const actionLabel = action.n === '_conf.rate' ? 'Rate Hz' :
                                 (action.n.startsWith('_conf.') ? (action.desc ?? action.n) : action.n);
-                            const actionValue = inputValues[action.n] ?? getDefaultActionValue(action);
+                            const actionValue = String(inputValues[action.n] ?? getDefaultMapKey(action));
                             return (
                                 <tr key={action.n}>
                                     <td title={action.desc}>{actionLabel}</td>
                                     <td>
                                         <select
                                             value={actionValue}
-                                            onChange={(e) =>
-                                                handleInputChange(
-                                                    action.n,
-                                                    parseFloat(e.target.value)
-                                                )
-                                            }
+                                            onChange={(e) => handleInputChange(action.n, e.target.value)}
                                         >
                                             {mapKeys.map((key) => (
-                                                <option key={key} value={parseFloat(key)}>
+                                                <option key={key} value={key}>
                                                     {key}
                                                 </option>
                                             ))}
@@ -232,7 +243,7 @@ const DeviceActionsForm: React.FC<DeviceActionsTableProps> = ({ deviceKey }: Dev
                                 </tr>
                             );
                         } else {
-                            const actionValue = inputValues[action.n] ?? getDefaultActionValue(action);
+                            const actionValue = Number(inputValues[action.n] ?? getDefaultActionValue(action));
                             return (
                                 <tr key={action.n}>
                                     <td title={action.desc}>{action.n}</td>
