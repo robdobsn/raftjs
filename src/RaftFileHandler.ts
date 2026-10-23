@@ -53,10 +53,6 @@ export default class RaftFileHandler {
 
   // Timeouts
   private BLOCK_ACK_TIMEOUT_MS = 30000;
-  // The device acks on a timer when it has received no block for 1s (5s before the second block). Its timer acks look
-  // like any other, so an ack this long after the last block was sent is taken as one: the device is waiting for
-  // the position it acks
-  private DEVICE_WAITING_ACK_MS = 700;
 
   // Contents of file to send
   private _requestedFileBlockSize = 500;
@@ -67,9 +63,6 @@ export default class RaftFileHandler {
   // File sending flow control
   private _sendWithoutBatchAcks = false;
   private _ackedFilePos = 0;
-  private _nextFilePos = 0;
-  private _lastBlockSentMs = 0;
-  private _deviceWaiting = false;
   private _batchAckReceived = false;
   private _isTxCancelled = false;
   private _fileTxStreamID = 0;
@@ -270,7 +263,6 @@ export default class RaftFileHandler {
 
     this._batchAckReceived = false;
     this._ackedFilePos = 0;
-    this._nextFilePos = 0;
 
     // Send file blocks
     let progressUpdateCtr = 0;
@@ -289,23 +281,28 @@ export default class RaftFileHandler {
         // NOTE: first batch MUST be of size 1 (not _batchAckSize) because Raft performs a long-running
         // blocking task immediately after receiving the first message in a firmware
         // update - although this could be relaxed for non-firmware update file uploads
-        const batchSize = this._nextFilePos == 0 ? 1 : this._batchAckSize;
-        const ackedBeforeBatch = this._ackedFilePos;
-        // Acks that arrive while the batch is going out count
+        //
+        // Each batch is sent from the latest ack (go-back-N). Current RaftCore acks the first block out of sequence
+        // at once and keeps its acks in step with the batches, so after a lost block this resends little and
+        // doesn't wait for the device's timer ack. (Carrying on past an ack that covers only part of a batch
+        // resends less with older firmware, but with current firmware it sends blocks the device then drops
+        // without an ack, and waits 1s for the timer ack after every lost block)
+        let sendFromPos = this._ackedFilePos;
+        const batchSize = sendFromPos == 0 ? 1 : this._batchAckSize;
+        // Acks that arrive while the batch is going out count (the device may ack part-way through a batch)
         this._batchAckReceived = false;
-        this._deviceWaiting = false;
         for (
           let i = 0;
-          i < batchSize && this._nextFilePos < fileContents.length;
+          i < batchSize && sendFromPos < fileContents.length;
           i++
         ) {
           // Debug
            RaftLog.debug(
-             `_sendFileContents sendblock pos ${this._nextFilePos} len ${this._fileBlockSize} ackedTo ${this._ackedFilePos} fileLen ${fileContents.length}`,
+             `_sendFileContents sendblock pos ${sendFromPos} len ${this._fileBlockSize} ackedTo ${this._ackedFilePos} fileLen ${fileContents.length}`,
            );
-          if (!await this._sendFileBlock(fileContents, this._nextFilePos))
+          if (!await this._sendFileBlock(fileContents, sendFromPos))
             return false;
-          this._nextFilePos = Math.min(fileContents.length, this._nextFilePos + this._fileBlockSize);
+          sendFromPos += this._fileBlockSize;
         }
 
         // Wait for response (there is a timeout at the ESP end to ensure a response is always returned
@@ -313,16 +310,6 @@ export default class RaftFileHandler {
         // being dropped
         await this.batchAck(this.BLOCK_ACK_TIMEOUT_MS);
         progressUpdateCtr += this._batchAckSize;
-
-        // Where to send from next. An ack with progress can be for part of what was sent: the device acks every
-        // batchAckSize blocks it receives, counting blocks it dropped, so after a lost block its acks fall in the
-        // middle of batches - carry on from what was sent, as going back would resend blocks the device has. An
-        // ack without progress, or a timer ack (the device is waiting), means blocks were lost: go back to it
-        if (this._ackedFilePos > ackedBeforeBatch && !this._deviceWaiting) {
-          this._nextFilePos = Math.max(this._nextFilePos, this._ackedFilePos);
-        } else {
-          this._nextFilePos = this._ackedFilePos;
-        }
       }
 
       // Show progress
@@ -399,7 +386,6 @@ export default class RaftFileHandler {
     }
 
     // Record
-    this._lastBlockSentMs = Date.now();
     this._commsStats.recordFileBytes(blockEnd - blockStart);
 
     // Add to list of pending messages
@@ -421,9 +407,6 @@ export default class RaftFileHandler {
     // Get how far we've progressed in file
     this._ackedFilePos = fileOkTo;
     this._batchAckReceived = true;
-    if (Date.now() - this._lastBlockSentMs >= this.DEVICE_WAITING_ACK_MS) {
-      this._deviceWaiting = true;
-    }
     RaftLog.verbose(`onOktoMsg received file up to ${this._ackedFilePos}`);
   }
 

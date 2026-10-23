@@ -130,6 +130,10 @@ async function upload(fileLen: number, block: number, batch: number, lose: numbe
   };
 }
 
+// Lost blocks (file positions) in a 100-block file of 100-byte blocks, batches of 10
+const MID_BATCH = [2300, 5400, 8600];
+const BATCH_START = [2000, 5000, 8000];
+
 describe("RaftFileHandler upload", () => {
   it("sends each block once when none are lost", async () => {
     const r = await upload(5000, 100, 10);
@@ -139,39 +143,37 @@ describe("RaftFileHandler upload", () => {
     expect(r.maxInFlight).toBeLessThanOrEqual(10);
   }, 30000);
 
-  // Before the change: 88 and 97 blocks sent for 50
+  // Current firmware (RaftCore from 2026-10-23) acks the first block out of sequence at once and keeps its acks in
+  // step with the batches: little is sent twice, and a lost block mid-batch needs no timer ack
   it.each([
-    ["one lost block", [1300], 8],
-    ["two lost blocks", [1300, 3700], 21],
-    ["the last block lost", [4900], 1],
-  ])("resends little after %s", async (_name, lose, extra) => {
-    const r = await upload(5000, 100, 10, lose as number[]);
+    ["mid-batch", MID_BATCH, 0],
+    ["at the start of a batch", BATCH_START, 1],
+  ])("recovers from blocks lost %s with current firmware", async (_name, lose, maxTimerAcks) => {
+    const r = await upload(10000, 100, 10, lose as number[], 15, true);
     expect([r.ok, r.intact]).toEqual([true, true]);
-    expect(r.blocksSent).toBeLessThanOrEqual(r.blocksNeeded + (extra as number));
-  }, 30000);
+    expect(r.timerAcks).toBeLessThanOrEqual(maxTimerAcks as number);
+    expect(r.blocksSent).toBeLessThanOrEqual(r.blocksNeeded + 3 * 10);
+    expect(r.maxInFlight).toBeLessThanOrEqual(10);
+  }, 60000);
 
-  // Before the change, on a link where each block takes time to send, an ack arriving while a batch was going out
-  // was ignored, so after one loss every later batch waited for the device's 1s timer ack (13 of them here)
+  // Older firmware counts the blocks it drops after a loss, so its acks fall part-way through batches. Before this
+  // handler counted acks arriving while a batch was going out, each later batch then waited for the device's 1s
+  // timer ack (13 of them after one loss in a 200-block file)
   it.each([
-    ["one lost block", [3000]],
-    ["three lost blocks", [2000, 5000, 8000]],
-  ])("doesn't wait for timer acks after %s on a slow link", async (_name, lose) => {
+    ["mid-batch", MID_BATCH],
+    ["at the start of a batch", BATCH_START],
+  ])("doesn't wait for timer acks after blocks lost %s with older firmware", async (_name, lose) => {
     const r = await upload(10000, 100, 10, lose as number[], 15);
     expect([r.ok, r.intact]).toEqual([true, true]);
     expect(r.timerAcks).toBeLessThanOrEqual(1);
-    // At most two batches beyond the last ack received
-    expect(r.maxInFlight).toBeLessThanOrEqual(20);
+    expect(r.maxInFlight).toBeLessThanOrEqual(10);
   }, 60000);
 
-  // Firmware that acks the first block out of sequence at once (RaftCore from 2026-10-23): acks stay in step with
-  // the batches, so no more than one batch is in flight and few blocks are sent twice
-  it("works with firmware that acks a block out of sequence at once", async () => {
-    const r = await upload(10000, 100, 10, [2000, 5000, 8000], 15, true);
+  it.each([[false], [true]])("recovers the last block lost (current firmware %s)", async (currentFirmware) => {
+    const r = await upload(5000, 100, 10, [4900], 0, currentFirmware);
     expect([r.ok, r.intact]).toEqual([true, true]);
-    expect(r.timerAcks).toBeLessThanOrEqual(1);
-    expect(r.maxInFlight).toBeLessThanOrEqual(10);
-    expect(r.blocksSent).toBeLessThanOrEqual(r.blocksNeeded + 3 * 10);
-  }, 60000);
+    expect(r.blocksSent).toBe(r.blocksNeeded + 1);
+  }, 30000);
 
   it("ignores a late ack behind one already received", () => {
     const handler = new RaftFileHandler({} as RaftMsgHandler, new RaftCommsStats());
