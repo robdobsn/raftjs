@@ -36,7 +36,8 @@ export default interface RaftDeviceMgrIF {
     removeDeviceRemovedCallback(callback: (deviceKey: string, state: DeviceState) => void): void;
 
     // Send action to device
-    sendAction(deviceKey: string, action: DeviceTypeAction, data: number[]): Promise<boolean>;
+    // For an action with a map, data is one value: the map key
+    sendAction(deviceKey: string, action: DeviceTypeAction, data: Array<number | string>): Promise<boolean>;
     sendCompoundAction(deviceKey: string, action: DeviceTypeAction, data: number[][]): Promise<boolean>;
 
     // Raw I2C write + read (returns read bytes, or null if unsupported/failed)

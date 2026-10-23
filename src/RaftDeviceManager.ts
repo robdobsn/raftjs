@@ -1457,12 +1457,14 @@ export class DeviceManager implements RaftDeviceMgrIF{
         }
     }
 
-    public async sendAction(deviceKey: string, action: DeviceTypeAction, data: number[]): Promise<boolean> {
+    // For an action with a map, data is one value: the map key (a string such as "raw", or a number for a
+    // numeric key such as "104")
+    public async sendAction(deviceKey: string, action: DeviceTypeAction, data: Array<number | string>): Promise<boolean> {
         console.log(`DeviceManager sendAction ${deviceKey} action ${action.n} data ${data} map ${JSON.stringify(action.map)} keys ${action.map ? Object.keys(action.map) : 'none'}`);
 
-        // For _conf.* actions, delegate to setSampleRate() which coordinates polling params
-        if (action.n.startsWith('_conf.') && action.map && data.length === 1) {
-            const result = await this.setSampleRate(deviceKey, data[0]);
+        // For _conf.rate, delegate to setSampleRate() which coordinates polling params
+        if (action.n === '_conf.rate' && action.map && data.length === 1) {
+            const result = await this.setSampleRate(deviceKey, Number(data[0]));
             return result.ok;
         }
 
@@ -1495,7 +1497,11 @@ export class DeviceManager implements RaftDeviceMgrIF{
                 return false;
             }
         } else {
-            const encoded = encodeActionWrite(action, data);
+            if (data.some((val) => typeof val !== 'number')) {
+                console.warn(`DeviceManager sendAction: action ${action.n} has no map so needs numbers, got ${data}`);
+                return false;
+            }
+            const encoded = encodeActionWrite(action, data as number[]);
             if (encoded === null) {
                 console.warn(`DeviceManager sendAction: can't encode ${data} for action ${action.n}`);
                 return false;

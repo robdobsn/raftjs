@@ -320,7 +320,7 @@ export class RICStateInfo implements RaftDeviceMgrIF {
     }
 
     // Marty ROSSerial devices are read-only in this view
-    async sendAction(_deviceKey: string, _action: DeviceTypeAction, _data: number[]): Promise<boolean> {
+    async sendAction(_deviceKey: string, _action: DeviceTypeAction, _data: Array<number | string>): Promise<boolean> {
         // Not supported for ROSSerial-derived devices
         return false;
     }
