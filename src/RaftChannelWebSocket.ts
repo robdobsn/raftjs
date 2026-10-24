@@ -37,9 +37,12 @@ export default class RaftChannelWebSocket implements RaftChannel {
   // Conn event fn
   private _onConnEvent: RaftConnEventFn | null = null;
 
-  // File Handler parameters
+  // File Handler parameters - the device's reply to ufStart decides the block size (older firmware allows 800 bytes
+  // on WebSocket, firmware with PSRAM from 2026-10 up to 16000). Bigger blocks are faster where storage is fast
+  // (uploads to an SD card: 28 KB/s with 800 byte blocks, 43 with 4000) but the device writes each block in its main
+  // loop, so 4000 keeps each write short
   private _requestedBatchAckSize = 10;
-  private _requestedFileBlockSize = 500;
+  private _requestedFileBlockSize = 4000;
 
   fhBatchAckSize(): number { return this._requestedBatchAckSize; }
   fhFileBlockSize(): number { return this._requestedFileBlockSize; }
