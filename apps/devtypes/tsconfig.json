@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "jsx": "react",
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "module": "esnext",
+    "target": "es2017",
+    "strict": true,
+    "noUnusedLocals": true,
+    "moduleResolution": "bundler",
+    "moduleSuffixes": [".web", ""],
+    "skipLibCheck": true,
+    "lib": ["ES2017", "DOM", "DOM.Iterable"]
+  },
+  "include": ["src"]
+}
