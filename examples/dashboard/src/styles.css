@@ -462,6 +462,29 @@ h1 {
     background-color: #fff;
 }
 
+.device-touchstrip {
+    padding: 10px;
+    border: 1px solid #666;
+    border-radius: 4px;
+    background-color: #282c34;
+    color: #fff;
+}
+
+.touchstrip-svg {
+    display: block;
+    width: min(100%, 36rem);
+    height: 6rem;
+}
+
+.touchstrip-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    min-height: 1.2rem;
+    font-size: 0.85rem;
+    font-variant-numeric: tabular-nums;
+}
+
 .device-zonegrid {
     padding: 10px;
     border: 1px solid #666;

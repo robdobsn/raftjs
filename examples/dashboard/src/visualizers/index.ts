@@ -13,6 +13,7 @@ import VcpCalVisualizer from './VcpCalVisualizer';
 import ZoneGridVisualizer from './ZoneGridVisualizer';
 import StackLightVisualizer from './StackLightVisualizer';
 import DistanceStripVisualizer from './DistanceStripVisualizer';
+import TouchStripVisualizer from './TouchStripVisualizer';
 import { getAttrElemsPerSample } from '../../../../src/RaftDeviceInfo';
 
 VisualizerRegistry.register({
@@ -53,6 +54,17 @@ VisualizerRegistry.register({
         return 0;
     },
     component: DistanceStripVisualizer,
+});
+
+VisualizerRegistry.register({
+    id: 'touchstrip',
+    placement: 'charts',
+    match: (item) => {
+        if (item.kind !== 'attribute') return 0;
+        if (item.attribute.vt === 'touchstrip') return 100;
+        return 0;
+    },
+    component: TouchStripVisualizer,
 });
 
 VisualizerRegistry.register({
