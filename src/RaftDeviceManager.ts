@@ -52,7 +52,8 @@ export interface DevManListDevs {
 export interface DevManTypes {
     total?: number;
     generation?: number;
-    types?: Array<{ dtIdx: number; key: string; src: string; policy: DevManTypePolicy }>;
+    // protected: a type a system device expects (expectType) - it can't be overridden or disabled (firmware from 2026-10-24)
+    types?: Array<{ dtIdx: number; key: string; src: string; policy: DevManTypePolicy; protected?: boolean }>;
 }
 
 export interface DevManIdentInfo {
@@ -113,6 +114,12 @@ export interface DevManTypeFileStatus {
     maxFileBytes?: number;
     identReady?: boolean;       // devices are being identified (the file has been loaded, or its timeout passed)
     restartRequired?: boolean;
+    // The firmware's rules (firmware from 2026-10-24): its RaftCore version, the record format it reads, and the
+    // on-device decoding built in - from a record's attributes (RAFT_RUNTIME_DECODE) and of custom decode and init
+    // code (RAFT_RUNTIME_DECODE_CODE)
+    raftCore?: string;
+    recordFormat?: number;
+    decode?: { attrs?: boolean; code?: boolean };
     entries?: DevManTypeFileEntry[];    // with getTypeFileStatus(true)
 }
 
