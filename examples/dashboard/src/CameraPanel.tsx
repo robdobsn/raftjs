@@ -43,6 +43,15 @@ interface CameraPanelProps {
   onSnapshotTaken?: () => void;
 }
 
+// The last snapshot, downloaded from the device to show in the panel
+interface Snapshot {
+  name: string;
+  url: string;
+  bytes: number;
+  width: number;
+  height: number;
+}
+
 export default function CameraPanel({ onSnapshotTaken }: CameraPanelProps) {
   const [status, setStatus] = useState<CameraStatus | null>(null);
   const [liveEnabled, setLiveEnabled] = useState(false);
@@ -57,7 +66,10 @@ export default function CameraPanel({ onSnapshotTaken }: CameraPanelProps) {
   const [isBusy, setIsBusy] = useState(false);
   const [lastMsg, setLastMsg] = useState('');
   const [lastError, setLastError] = useState('');
+  const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
+  const [snapshotProgress, setSnapshotProgress] = useState<number | null>(null);
   const imageUrlRef = useRef<string | null>(null);
+  const snapshotUrlRef = useRef<string | null>(null);
   const liveEnabledRef = useRef(false);
 
   const fetchStatus = async () => {
@@ -156,6 +168,56 @@ export default function CameraPanel({ onSnapshotTaken }: CameraPanelProps) {
     };
   }, []);
 
+  // Release the snapshot image when the panel goes
+  useEffect(() => {
+    return () => {
+      if (snapshotUrlRef.current) URL.revokeObjectURL(snapshotUrlRef.current);
+    };
+  }, []);
+
+  // Show a snapshot (or none), releasing the one shown before
+  const showSnapshot = (shot: Snapshot | null) => {
+    if (snapshotUrlRef.current) URL.revokeObjectURL(snapshotUrlRef.current);
+    snapshotUrlRef.current = shot ? shot.url : null;
+    setSnapshot(shot);
+  };
+
+  // Download a snapshot just taken from the device and show it
+  const loadSnapshot = async (fsName: string, filename: string, width: number, height: number) => {
+    const name = filename.replace(/^.*\//, '');
+    setSnapshotProgress(0);
+    try {
+      const result = await connManager.getConnector().fsGetContents(
+        `${fsName}/${filename.replace(/^\/+/, '')}`,
+        'fs',
+        (received: number, total: number) => {
+          if (total > 0) setSnapshotProgress(Math.round((received / total) * 100));
+        }
+      );
+      if (result.downloadedOk && result.fileData) {
+        const copy = new Uint8Array(result.fileData);
+        const blob = new Blob([copy.buffer as ArrayBuffer], { type: 'image/jpeg' });
+        showSnapshot({ name, url: URL.createObjectURL(blob), bytes: copy.length, width, height });
+      } else {
+        setLastError(`Snapshot saved, but it couldn't be downloaded to show it (${name})`);
+      }
+    } catch (e) {
+      console.warn('Snapshot download failed', e);
+      setLastError(`Snapshot saved, but it couldn't be downloaded to show it (${name})`);
+    }
+    setSnapshotProgress(null);
+  };
+
+  const handleSnapshotDownload = () => {
+    if (!snapshot) return;
+    const a = document.createElement('a');
+    a.href = snapshot.url;
+    a.download = snapshot.name;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  };
+
   // Unsubscribe from the device topic on unmount if live view is on
   useEffect(() => {
     return () => {
@@ -214,6 +276,10 @@ export default function CameraPanel({ onSnapshotTaken }: CameraPanelProps) {
       if (r?.rslt === 'ok') {
         setLastMsg(`Saved ${r.filename ?? ''} (${r.bytes ?? 0} bytes, ${r.width ?? 0}x${r.height ?? 0})`);
         onSnapshotTaken?.();
+        // Show it (a device that only queued the capture gives no size yet - see it in the image files instead)
+        if (r.filename && r.fs && r.bytes) {
+          await loadSnapshot(r.fs, r.filename, r.width ?? 0, r.height ?? 0);
+        }
       } else {
         setLastError('Snapshot failed');
       }
@@ -291,6 +357,26 @@ export default function CameraPanel({ onSnapshotTaken }: CameraPanelProps) {
               {' '}#{frameMeta.imageCount} · {measuredFps.toFixed(1)} fps
             </div>
           )}
+        </div>
+      )}
+
+      {snapshotProgress !== null && (
+        <div className="camera-panel-note">Loading snapshot... {snapshotProgress}%</div>
+      )}
+      {snapshot && (
+        <div className="camera-live-view camera-snapshot">
+          <img className="camera-live-img" src={snapshot.url} alt="Snapshot" />
+          <div className="camera-frame-meta">
+            Snapshot {snapshot.name} · {snapshot.width}x{snapshot.height} · {(snapshot.bytes / 1024).toFixed(1)} KB
+          </div>
+          <div className="camera-controls-row">
+            <button className="action-button" onClick={handleSnapshotDownload}>
+              Download
+            </button>
+            <button className="action-button" onClick={() => showSnapshot(null)}>
+              Close
+            </button>
+          </div>
         </div>
       )}
 
