@@ -1,59 +1,55 @@
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 //
 // TypeFilePanel
-// Device type file: the device's current file, and uploading a new one - uploaded under another name, checked by
-// the device (what each entry would do, and where its on-device decoder comes from), then applied (the device
-// restarts). See the RaftCore wiki: DeviceManager REST API, devman/typefile
+// Device type file: the device's current file, and pushing a new one with raftjs's DeviceTypeFileManager - uploaded
+// under another name, checked by the device (what each entry would do, and where its on-device decoder comes from),
+// then applied (the device restarts) and verified once it is back. See the RaftCore wiki: DeviceManager REST API,
+// devman/typefile
 //
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import './styles.css';
-import { DevManTypeFileCheck, DevManTypeFileEntry, DevManTypeFileStatus } from '../../../src/main';
+import { DevManTypeFileCheck, DevManTypeFileEntry, DevManTypeFileStatus, DeviceTypeFileManager, TypeFilePushStage,
+    TypeFileResponse, typeFileCrc } from '../../../src/main';
 import ConnManager from './ConnManager';
 
 const connManager = ConnManager.getInstance();
 
-// The name a new file is uploaded as (in the folder of the device's type file) before it is checked and applied
-const UPLOAD_NAME = 'devlib.new.json';
-
-type TypeFileResp<T> = T & { rslt?: string; error?: string };
-
-function folderOf(path: string | undefined): string {
-    if (!path)
-        return '/local/';
-    const slash = path.lastIndexOf('/');
-    return slash >= 0 ? path.slice(0, slash + 1) : '/local/';
-}
+const STAGE_TEXT: Record<TypeFilePushStage, string> = {
+    status: 'Reading the device\'s file', upload: 'Uploading', check: 'The device is checking the file',
+    confirm: 'Checked', apply: 'Applying', restart: 'The device is restarting', verify: 'Checking the device loaded it', done: 'Done',
+};
 
 export default function TypeFilePanel() {
+    const managerRef = useRef<DeviceTypeFileManager | null>(null);
+    if (!managerRef.current)
+        managerRef.current = new DeviceTypeFileManager(connManager.getConnector());
+    const manager = managerRef.current;
+
     const [supported, setSupported] = useState<boolean | null>(null);
-    const [status, setStatus] = useState<TypeFileResp<DevManTypeFileStatus> | null>(null);
+    const [status, setStatus] = useState<TypeFileResponse<DevManTypeFileStatus> | null>(null);
     const [fileName, setFileName] = useState('');
-    const [fileBytes, setFileBytes] = useState<Uint8Array | null>(null);
+    const [fileText, setFileText] = useState<string | null>(null);
     const [fileInfo, setFileInfo] = useState('');
     const [busy, setBusy] = useState(false);
     const [progress, setProgress] = useState('');
-    const [check, setCheck] = useState<TypeFileResp<DevManTypeFileCheck> | null>(null);
+    const [check, setCheck] = useState<TypeFileResponse<DevManTypeFileCheck> | null>(null);
+    const [awaitingApply, setAwaitingApply] = useState(false);
     const [message, setMessage] = useState('');
     const [isError, setIsError] = useState(false);
-
-    const uploadPath = folderOf(status?.file) + UPLOAD_NAME;
+    const confirmRef = useRef<((apply: boolean) => void) | null>(null);
 
     const refreshStatus = async () => {
-        try {
-            const resp = await connManager.getConnector().sendRICRESTMsg('devman/typefile', {}) as TypeFileResp<DevManTypeFileStatus>;
-            const ok = resp?.rslt === 'ok';
-            setSupported(ok);
-            if (ok)
-                setStatus(resp);
-        } catch {
-            setSupported(false);
-        }
+        const resp = await manager.status();
+        const ok = resp?.rslt === 'ok';
+        setSupported(ok);
+        if (ok)
+            setStatus(resp);
     };
 
     useEffect(() => {
-        refreshStatus();
+        void refreshStatus();
     }, []);
 
     const report = (text: string, error = false) => {
@@ -66,78 +62,75 @@ export default function TypeFilePanel() {
         report('');
         const file = e.target.files?.[0];
         if (!file) {
-            setFileBytes(null);
+            setFileText(null);
             setFileName('');
             setFileInfo('');
             return;
         }
-        const bytes = new Uint8Array(await file.arrayBuffer());
+        const text = await file.text();
         setFileName(file.name);
-        setFileBytes(bytes);
+        setFileText(text);
         // A quick look before sending - the device does the real check
         try {
-            const json = JSON.parse(new TextDecoder().decode(bytes));
-            const keys = json && typeof json.devTypes === 'object' ? Object.keys(json.devTypes) : [];
-            if (!json || typeof json.devTypes !== 'object')
-                setFileInfo(`${bytes.length} bytes - no "devTypes" object, the device will reject it`);
-            else
-                setFileInfo(`${bytes.length} bytes, ${keys.length} entr${keys.length === 1 ? 'y' : 'ies'}: ${keys.join(', ')}`);
-        } catch {
-            setFileInfo(`${bytes.length} bytes - not valid JSON, the device will reject it`);
+            const { devTypes } = DeviceTypeFileManager.parseTypeFile(text);
+            const keys = Array.from(devTypes.keys());
+            setFileInfo(`${text.length} bytes, CRC ${typeFileCrc(text)}, ${keys.length} entr${keys.length === 1 ? 'y' : 'ies'}: ${keys.join(', ')}`);
+        } catch (err) {
+            setFileInfo(`${text.length} bytes - ${err instanceof Error ? err.message : err}, the device will reject it`);
         }
     };
 
-    const handleUploadAndCheck = async () => {
-        if (!fileBytes)
+    // Push: the device checks the file, and it is applied only when Apply is pressed (dryRun: only checked)
+    const handlePush = async (dryRun: boolean) => {
+        if (fileText === null)
             return;
         setBusy(true);
         setCheck(null);
         report('');
-        try {
-            setProgress('Uploading...');
-            const sent = await connManager.getConnector().sendFile(UPLOAD_NAME, fileBytes, (sentBytes, total) => {
-                setProgress(`Uploading ${sentBytes} / ${total} bytes`);
-            });
-            setProgress('');
-            if (!sent) {
-                report('Upload failed', true);
-                return;
-            }
-            const resp = await connManager.getConnector().sendRICRESTMsg(
-                `devman/typefile/check?file=${encodeURIComponent(uploadPath)}&entries=1`, {}) as TypeFileResp<DevManTypeFileCheck>;
-            setCheck(resp);
-            if (resp?.rslt !== 'ok')
-                report(`Check failed: ${resp?.error ?? 'no response'}`, true);
-            else if (resp.valid)
-                report(`Uploaded to ${uploadPath} and checked - nothing rejected. Apply to use it (the device restarts).`);
-            else
-                report(`Uploaded to ${uploadPath} - ${resp.rejected} entr${resp.rejected === 1 ? 'y' : 'ies'} rejected, so it can't be applied`, true);
-        } catch (err) {
-            setProgress('');
-            report(`Upload failed: ${err}`, true);
-        } finally {
-            setBusy(false);
+        const result = await manager.push(fileText, {
+            dryRun,
+            force: true,
+            onProgress: (stage, detail) => setProgress(`${STAGE_TEXT[stage]}${detail ? ` (${detail})` : ''}...`),
+            confirm: (checked) => new Promise<boolean>((resolve) => {
+                setCheck(checked);
+                setAwaitingApply(true);
+                setProgress('');
+                confirmRef.current = resolve;
+            }),
+        });
+        setAwaitingApply(false);
+        setProgress('');
+        if (result.check)
+            setCheck(result.check);
+        const ok = result.outcome === 'applied' || result.outcome === 'dryRun' || result.outcome === 'notConfirmed';
+        report(result.outcome === 'dryRun' ? 'Checked by the device - not applied (the uploaded file was removed)' : result.message, !ok);
+        setBusy(false);
+        if (result.outcome === 'applied')
+            await refreshStatus();
+    };
+
+    const answer = (apply: boolean) => {
+        if (!apply || window.confirm('Make this file the device type file and restart the device?')) {
+            setAwaitingApply(false);
+            confirmRef.current?.(apply);
+            confirmRef.current = null;
         }
     };
 
-    const handleApply = async () => {
-        if (!window.confirm(`Make ${uploadPath} the device type file and restart the device?`))
+    const handleDownload = async () => {
+        const pulled = await manager.pull();
+        if (!pulled) {
+            report('The device type file could not be read', true);
             return;
-        setBusy(true);
-        try {
-            const resp = await connManager.getConnector().sendRICRESTMsg(
-                `devman/typefile/apply?file=${encodeURIComponent(uploadPath)}`, {}) as TypeFileResp<DevManTypeFileCheck & { restarting?: boolean }>;
-            if (resp?.rslt === 'ok') {
-                report('Applied - the device is restarting. Reconnect when it is back.');
-                setCheck(null);
-            } else {
-                report(`Not applied: ${resp?.error ?? 'no response'}${resp?.firstError ? ` - ${resp.firstError}` : ''}`, true);
-            }
-        } catch (err) {
-            report(`Apply failed: ${err}`, true);
-        } finally {
-            setBusy(false);
         }
+        const url = URL.createObjectURL(new Blob([pulled.text], { type: 'application/json' }));
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = pulled.path.slice(pulled.path.lastIndexOf('/') + 1) || 'devlib.json';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
     };
 
     if (!supported)
@@ -151,22 +144,30 @@ export default function TypeFilePanel() {
             <div className="type-file-status">
                 {status?.present ? (
                     <>
-                        <div>{status.file}{status.state ? ` - ${status.state}` : ''}{status.crc ? ` (crc ${status.crc})` : ''}</div>
+                        <div>{status.file}{status.state ? ` - ${status.state}` : ''}{status.crc ? ` (crc ${status.crc})` : ''}
+                            {' '}<button className="action-button" onClick={() => void handleDownload()} disabled={busy}>Download</button></div>
                         {status.restartRequired && <div className="type-file-warning">Changed on disk - a restart is needed to apply it</div>}
                         {status.firstError && <div className="type-file-warning">{status.firstError}</div>}
                     </>
                 ) : (
                     <div>No device type file{status?.file ? ` (${status.file})` : ''}</div>
                 )}
+                {status?.maxFileBytes ? <div>Limit {status.maxFileBytes} bytes{status.raftCore ? `; RaftCore ${status.raftCore}` : ''}</div> : null}
             </div>
             <div className="type-file-controls">
                 <input type="file" accept=".json,application/json" onChange={handleFileChosen} disabled={busy} />
-                <button className="action-button" onClick={handleUploadAndCheck} disabled={busy || !fileBytes}>
+                <button className="action-button" onClick={() => void handlePush(true)} disabled={busy || fileText === null}>
+                    Check
+                </button>
+                <button className="action-button" onClick={() => void handlePush(false)} disabled={busy || fileText === null}>
                     Upload &amp; Check
                 </button>
-                <button className="action-button" onClick={handleApply} disabled={busy || !check?.valid}>
-                    Apply (restart)
-                </button>
+                {awaitingApply && (
+                    <>
+                        <button className="action-button" onClick={() => answer(true)} disabled={!check?.valid}>Apply (restart)</button>
+                        <button className="action-button" onClick={() => answer(false)}>Cancel</button>
+                    </>
+                )}
             </div>
             {fileName && fileInfo && <div className="type-file-info">{fileName}: {fileInfo}</div>}
             {progress && <div className="type-file-info">{progress}</div>}
