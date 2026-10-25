@@ -22,7 +22,9 @@ import { DevTypeJson, DevTypeJsonNumber, DevTypeJsonObject, cloneDevTypeJson, co
     isDevTypeJsonObject, writeDevTypeJson } from "./RaftDeviceTypeJson";
 import { compileDeviceTypeCommand } from "./RaftDeviceTypeGrammar";
 
+// The device's default size limit for its type file (more with PSRAM; devman/typefile reports the device's own)
 export const TYPE_FILE_MAX_BYTES_DEFAULT = 65536;
+export const TYPE_FILE_MAX_BYTES_DEFAULT_PSRAM = 262144;
 
 // Policies for a device type (as typePolicy, DeviceTypeSources.json policy)
 export type DeviceTypePolicyName = "enabled" | "disabled" | "disabledClaim";

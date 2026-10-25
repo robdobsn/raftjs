@@ -96,6 +96,16 @@ describe("GitHub sources", () => {
         await expect(readGitHubSource("acme", spec(), { fetch: fetchFn, raftCore: "1.59.0" })).rejects.toThrow("needs RaftCore 1.60.0");
         await expect(readGitHubSource("acme", spec({ path: "nope" }), { fetch: fetchFn })).rejects.toThrow("not found in the repo");
         await expect(readGitHubSource("acme", spec({ ref: "v9" }), { fetch: fetchFn })).rejects.toThrow("HTTP 404");
+        // Code outside the decode language is refused, as a build refuses it
+        const badCommit = "b".repeat(40);
+        const bad = fakeFetch({
+            [`https://api.github.com/repos/acme/bad/git/trees/${badCommit}?recursive=1`]: JSON.stringify({ tree: [{ path: "Widget.json", type: "blob" }] }),
+            [`https://raw.githubusercontent.com/acme/bad/${badCommit}/Widget.json`]:
+                '{"addresses":"0x41","devInfoJson":{"resp":{"b":1,"a":[{"n":"v"}],"c":{"n":"f","c":"out.v=buf[0];abort();"}}}}',
+        });
+        await expect(readGitHubSource("bad", parseDevTypeJson('{"git":"https://github.com/acme/bad","ref":"main","path":"Widget.json"}') as DevTypeJsonObject,
+            { fetch: bad }, badCommit)).rejects.toThrow('"Widget" from source "bad": its decode code (resp.c) isn\'t allowed: ' +
+            "abort is not declared in the code; abort(...) - function calls are not allowed");
         await expect(readGitHubSource("acme", parseDevTypeJson('{"git":"https://gitlab.com/a/b.git","ref":"v1"}') as DevTypeJsonObject,
             { fetch: fetchFn })).rejects.toThrow("only GitHub");
     });
