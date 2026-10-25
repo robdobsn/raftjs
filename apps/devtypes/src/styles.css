@@ -44,10 +44,10 @@ nav button { background: none; border: none; border-bottom: 2px solid transparen
 nav button.active { color: var(--fg); border-bottom-color: var(--accent); }
 main { padding: 16px; max-width: 1100px; margin: 0 auto; }
 
-button.btn { background: var(--surface); color: var(--fg); border: 1px solid var(--rule); border-radius: 6px; padding: 5px 12px;
+.btn { display: inline-block; background: var(--surface); color: var(--fg); border: 1px solid var(--rule); border-radius: 6px; padding: 5px 12px;
              font: inherit; cursor: pointer; }
-button.btn.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
-button.btn:disabled { opacity: 0.5; cursor: default; }
+.btn.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+.btn:disabled { opacity: 0.5; cursor: default; }
 button.link { background: none; border: none; color: var(--accent); padding: 0; font: inherit; cursor: pointer; }
 input[type=text], input[type=search], select { background: var(--bg); color: var(--fg); border: 1px solid var(--rule); border-radius: 6px;
              padding: 5px 8px; font: inherit; }

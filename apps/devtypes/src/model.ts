@@ -5,7 +5,7 @@ import {
     DevManTypeFileCheck, DevManTypeFileStatus, DevTypeJson, DevTypeJsonObject, DeviceTypeCatalogueEntry, DeviceTypeCatalogueIndex,
     DeviceTypeFileManager, DeviceTypePolicyName, DeviceTypeRecordFile, DeviceTypeSelectionResult, DeviceTypeSourceRecords,
     DeviceTypeSourceRecordsWithFiles, DevManTypeTableEntry, MergedDeviceTypeSources, RaftConnEvent, RaftConnector, RaftCoreCatalogue,
-    RaftSystemUtils, TypeFileBuildResult, TypeFilePushResult, TypeFilePushStage, TypeFileResponse, buildTypeFile,
+    RaftSystemUtils, TYPE_FILE_MAX_BYTES_DEFAULT_PSRAM, TypeFileBuildResult, checkDeviceTypeRecordCode, TypeFilePushResult, TypeFilePushStage, TypeFileResponse, buildTypeFile,
     deviceTypeLockText, deviceTypeSourceKind, devTypeJsonFromPlain, devTypeJsonGet, devTypeJsonToPlain, isDevTypeJsonObject,
     mergeDeviceTypeSources, parseDevTypeJson, readGitHubSource, recordsFromFiles, resolveDeviceTypeSelection, sha256Hex,
     writeDevTypeJson, RAFTCORE_PAGES_CATALOGUE_URL,
@@ -37,7 +37,8 @@ export interface BuildState {
     error?: string;
     offline: boolean;                       // no device: records shown as new
     unknownCompiled: string[];              // keys the device's type file overrides (compiled record unknown)
-    maxBytes: number;
+    maxBytes: number;                       // the device's limit, or (no device) the limit of boards with PSRAM
+    codeProblems: Map<string, string[]>;    // records from local files whose code isn't in the decode language
 }
 
 export interface PushState {
@@ -87,7 +88,7 @@ export class DevTypesModel {
     connMethod?: string;
     device?: DeviceInfo;
     compiled = new Map<string, DevTypeJson>();
-    build: BuildState = { offline: true, unknownCompiled: [], maxBytes: 65536 };
+    build: BuildState = { offline: true, unknownCompiled: [], maxBytes: TYPE_FILE_MAX_BYTES_DEFAULT_PSRAM, codeProblems: new Map() };
     pushState: PushState = {};
     message?: { text: string; error?: boolean };
 
@@ -402,8 +403,8 @@ export class DevTypesModel {
     //////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
     async rebuild() {
-        const build: BuildState = { offline: !this.device?.table, unknownCompiled: [],
-            maxBytes: this.device?.status?.maxFileBytes ?? 65536 };
+        const build: BuildState = { offline: !this.device?.table, unknownCompiled: [], codeProblems: new Map(),
+            maxBytes: this.device?.status?.maxFileBytes ?? TYPE_FILE_MAX_BYTES_DEFAULT_PSRAM };
         try {
             const sources = new Map<string, DeviceTypeSourceRecords>();
             for (const name of Object.keys(this.selection.sources)) {
@@ -414,6 +415,14 @@ export class DevTypesModel {
             }
             build.merged = mergeDeviceTypeSources([{ name: "selection", content: JSON.stringify(this.selection) }]);
             build.selection = resolveDeviceTypeSelection(build.merged, "typeFile", sources);
+            // Code from local files (a git source with such code isn't read at all, and RaftCore's records pass)
+            build.selection.records.forEach((rec, key) => {
+                if (this.sourceKind(build.selection?.origin.get(key) ?? "") !== "path")
+                    return;
+                const problems = checkDeviceTypeRecordCode(rec);
+                if (problems.length > 0)
+                    build.codeProblems.set(key, problems);
+            });
             // The records the device has compiled in (from the device), for new / override / unchanged
             const compiled = new Map<string, DevTypeJson>();
             const table = this.device?.table;

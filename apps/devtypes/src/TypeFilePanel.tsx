@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { TypeFileBuildEntry } from "../../../src/main";
+import { TYPE_FILE_MAX_BYTES_DEFAULT, TypeFileBuildEntry } from "../../../src/main";
 import { useModel } from "./App";
 
 const STAGE_TEXT: Record<string, string> = {
@@ -80,7 +80,10 @@ export function TypeFilePanel() {
                 {b.error && <div className="notice error">{b.error}</div>}
                 {b.result && (
                     <>
-                        <p>{b.result.bytes} of {b.maxBytes} bytes · CRC <span className="mono">{b.result.crc}</span>
+                        {b.offline && b.result.bytes > TYPE_FILE_MAX_BYTES_DEFAULT &&
+                            <div className="notice warn">{b.result.bytes} bytes is more than boards without PSRAM take by default
+                                ({TYPE_FILE_MAX_BYTES_DEFAULT} bytes; {b.maxBytes} with PSRAM).</div>}
+                        <p>{b.result.bytes} of {b.maxBytes} bytes{b.offline ? " (with PSRAM)" : ""} · CRC <span className="mono">{b.result.crc}</span>
                             {m.device?.pulled && m.device.pulled.crc === b.result.crc && <span className="ok"> · the device has this file</span>}</p>
                         <div className="table-wrap">
                             <table>
@@ -93,7 +96,9 @@ export function TypeFilePanel() {
                                             <td>{e.kind === "new" ? "adds a type" : e.kind === "override" ? "replaces the compiled record" :
                                                 e.kind === "unchanged" ? "the same as compiled - left out" : e.policy === "disabledClaim" ? "disables it (address kept)" : "disables it"}</td>
                                             <td>{e.kind === "new" || e.kind === "override" ? decodingNote(e, decode) : ""}</td>
-                                            <td>{e.initCode === "runtime" ? "init code: needs the code interpreter" : e.initCode ? "init code: compiled one used without the interpreter" : ""}</td>
+                                            <td>{e.initCode === "runtime" ? "init code: needs the code interpreter" : e.initCode ? "init code: compiled one used without the interpreter" : ""}
+                                                {b.codeProblems.has(e.key) && <div className="bad">Code outside the decode language - the device won't
+                                                    run it (so no decoding on the device), and a build warns about it: {(b.codeProblems.get(e.key) as string[]).join("; ")}</div>}</td>
                                         </tr>
                                     ))}
                                 </tbody>
