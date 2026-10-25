@@ -15,6 +15,7 @@
 
 import { DevTypeJson, DevTypeJsonNumber, DevTypeJsonObject, compareCodePoints, devTypeJsonGet, isDevTypeJsonObject, parseDevTypeJson,
     writeDevTypeJson } from "./RaftDeviceTypeJson";
+import { checkDeviceTypeRecordCode } from "./RaftDeviceTypeCodeCheck";
 import { DeviceTypeSelectionResult, DeviceTypeSourceRecords, MergedDeviceTypeSources, deviceTypeSourceKind } from "./RaftDeviceTypeSources";
 
 export const RAFTCORE_PAGES_CATALOGUE_URL = "https://robdobsn.github.io/RaftCore/devtypes";
@@ -328,6 +329,12 @@ export async function readGitHubSource(name: string, spec: DevTypeJsonObject, op
         throw new DeviceTypeSourceError(`${what}: ${subpath} not found in the repo`);
     const files = await Promise.all((asFile ? [asFile] : inFolder).map(async (e) => ({ path: e.path, text: await readFile(e.path) })));
     const result = recordsFromFiles(files, !asFile);
+    // Code from another source may use only the decode language (as a build checks a git source)
+    result.records.forEach((record, key) => {
+        const problems = checkDeviceTypeRecordCode(record);
+        if (problems.length > 0)
+            throw new DeviceTypeSourceError(`"${key}" from source "${name}": its decode code (resp.c) isn't allowed: ${problems.join("; ")}`);
+    });
     return { ...result, commit };
 }
 

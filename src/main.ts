@@ -44,6 +44,7 @@ export * from "./RaftDeviceInfo";
 export { getHostTimezone, getHostPosixTZ, ianaToPosixTZ } from './RaftTimezone';
 export * from './RaftDeviceTypeJson';
 export * from './RaftDeviceTypeGrammar';
+export * from './RaftDeviceTypeCodeCheck';
 export * from './RaftDeviceTypeFile';
 export * from './RaftDeviceTypeFileManager';
 export * from './RaftDeviceTypeSources';

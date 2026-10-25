@@ -466,13 +466,11 @@ Phases 2 and 4 are independent and can run in parallel; 3 can follow 2 or be fol
     since it was read; dry run; confirm; waits for the restart; verifies CRC and per-entry outcomes). The upload goes
     to `local/devlib.new.json` explicitly, since a bare name goes to the default file system, which can be the SD card.
   - `RaftDeviceManager`: the new status fields and `protected` (types only).
-- Not done: the dashboard's `TypeFilePanel` still has its own steps. It should move onto `DeviceTypeFileManager`,
-  but the dashboard is being changed by other work, so it was left alone.
+- The dashboard's `TypeFilePanel` uses `DeviceTypeFileManager` (2026-10-25, below).
 
 ### Phase 3: early checks
 
-- The grammar (above). The decode language check (`PseudocodeHandler.check_code`) isn't ported: the device's check
-  rejects such code, and the app marks records with custom code.
+- The grammar (above), and the decode language check (2026-10-25, below).
 
 ### Phase 4: the catalogue on Pages (RaftCore)
 
@@ -521,3 +519,35 @@ Phases 2 and 4 are independent and can run in parallel; 3 can follow 2 or be fol
 
 - Every RaftCore record as one type file is now 63,673 bytes, just under the 64 KB default `maxFileBytes`. The
   "all records at runtime" setup (RaftCore plan §3.8) will need a larger limit after a record or two more.
+
+### 2026-10-25
+
+- **Merged:** RaftCore#18 and raftjs#21. RaftCore v1.62.0 was released; the catalogue and the app are on Pages.
+- **Release deploys:** the v1.62.0 release's Pages run built, but its deploy was refused ("Tag v1.62.0 is not allowed
+  to deploy to github-pages"). The environment only deploys from `main`, and a `release` event runs on the tag. Now
+  `release-assets.yml` starts `pages.yml` on `main` (`gh workflow run`, allowed from `GITHUB_TOKEN`), and `pages.yml`
+  has no `release` trigger. Until this is merged, v1.62.0 is published by running the workflow by hand.
+- **The type file size limit:**
+  - It was 64 KB on every board (`DeviceTypeFileLoader::Limits`). The whole file is read into one buffer (in PSRAM
+    where there is any) and parsed in place, so the limit guards one large allocation. Every RaftCore record as one
+    file was already 63.7 KB.
+  - Now the default is 256 KB with PSRAM and 64 KB without, as `typeTable` already is (256 KB / 20 KB of extended
+    records). `typeFileLimits.maxFileBytes` still sets another.
+  - The Python tools use the same default for the SysType, from its `sdkconfig.defaults` (`CONFIG_SPIRAM=y`; the
+    build's merged file for `--fs-image`, the selection files' folders for `--typefile`). `raft devtypes push` uses
+    the device's own limit, as before.
+  - With no device, the app allows 256 KB and warns above 64 KB.
+- **Decode code check in TypeScript:** `RaftDeviceTypeCodeCheck` (`checkDeviceTypeCode`, `checkDeviceTypeRecordCode`)
+  gives `PseudocodeHandler.check_code`'s problems, word for word, on the shared `codecheck_vectors.json` (written by
+  `make_codecheck_vectors.py`, with RaftCore's records' code). `readGitHubSource` refuses a record with such code, as
+  a build refuses one from a git source. The app shows the problems of local records' code.
+- **Dashboard `TypeFilePanel`:** on `DeviceTypeFileManager`. Check only, or upload and check, then Apply or Cancel; it
+  waits for the restart and verifies. It can also download the device's file.
+- **Raft Flasher (`apps/flasher`, published at `flash/` on the Pages site):**
+  - esptool-js 0.7.0 over Web Serial.
+  - Reads a build folder (or its files) through `flasher_args.json`, as `raft flash` does, or an ESP Web Tools manifest.
+  - Shows the partition table and the app's description, checks image sizes against partitions and the chip, and
+    writes everything, the firmware only (`--no-fs`) or the file system only, optionally erasing first, with MD5
+    verification.
+  - Checked: `flashImage.test.ts` (13 tests), Axiom018's real build read correctly, and the page in headless Chrome.
+  - **Not yet checked on a board.**

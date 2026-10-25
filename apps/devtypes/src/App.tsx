@@ -96,7 +96,7 @@ export default function App() {
     return (
         <>
             <header>
-                <h1>Raft Device Types</h1>
+                <h1>Raft Device Types <a className="muted" style={{ fontSize: 14, fontWeight: "normal", marginLeft: 10 }} href="../../flash/">Flasher</a></h1>
                 <ConnectBar />
             </header>
             <nav>
