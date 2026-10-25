@@ -5,6 +5,11 @@
     "main": "dist/web/main.js",
     "types": "dist/web/main.d.ts",
     "react-native": "dist/react-native/main.js",
+    "files": [
+        "dist",
+        "src",
+        "!src/**/*.test.ts"
+    ],
     "author": "Rob Dobson <rob@dobson.com>",
     "repository": {
         "type": "git",
