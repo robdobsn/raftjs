@@ -30,7 +30,8 @@ describe("selection vectors", () => {
             const merged = mergeDeviceTypeSources(Object.entries(vec.files).map(([name, content]) => ({ name, content: content as string })));
             const sources = new Map<string, DeviceTypeSourceRecords>();
             for (const [name, source] of Object.entries<any>(vec.sources))
-                sources.set(name, { records: recordsOf(source.records), raftCore: source.kind === "bundled" ? vectorsFile.raftCore : undefined });
+                sources.set(name, { records: recordsOf(source.records), raftCore: source.kind === "bundled" ? vectorsFile.raftCore : undefined,
+                    sets: source.sets ? new Map(Object.entries<string[]>(source.sets)) : undefined });
             return resolveDeviceTypeSelection(merged, vec.section as DeviceTypeSection, sources);
         };
         if (vec.error !== undefined) {

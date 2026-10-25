@@ -58,6 +58,7 @@ export interface DeviceTypeSourceRecords {
     records: Map<string, DevTypeJson>;
     commit?: string;            // a git source: the commit its ref resolved to
     raftCore?: string;          // RaftCore's records: its version
+    sets?: Map<string, string[]>;   // RaftCore's records: its named sets (devtypes/sets), selected as "<source>:@<set>"
 }
 
 export interface DeviceTypeSelectionResult {
@@ -188,7 +189,25 @@ export function resolveDeviceTypeSelection(merged: MergedDeviceTypeSources, sect
         sources.set(name, { records: loaded.records, isLocal: kind === "path" });
     }
     const names = Array.from(sources.keys());
+    const bundled = names.filter((n) => deviceTypeSourceKind(merged.sources.get(n) as DevTypeJsonObject) === "bundled");
     const chosen = merged.sections[section];
+
+    // The keys of a named set ("<source>:@<set>", RaftCore's records only)
+    const setKeys = (pattern: string, source: string | undefined, key: string, listName: string): string[] => {
+        if (source === undefined || !bundled.includes(source))
+            throw new DeviceTypeSelectionError(`${section}.${listName} "${pattern}": named sets (@...) are only in RaftCore's records - ` +
+                `use "<the bundled source>:${key}"`);
+        const sets = sourceRecords.get(source)?.sets ?? new Map<string, string[]>();
+        const keys = sets.get(key.slice(1));
+        if (keys === undefined)
+            throw new DeviceTypeSelectionError(`${section}.${listName} "${pattern}": no set "${key.slice(1)}" in RaftCore's records ` +
+                `(sets: ${Array.from(sets.keys()).sort().join(", ") || "none"})`);
+        const records = (sources.get(source) as { records: Map<string, DevTypeJson> }).records;
+        const missing = keys.filter((k) => !records.has(k));
+        if (missing.length > 0)
+            throw new DeviceTypeSelectionError(`set "${key.slice(1)}" names ${missing.join(", ")}, not in RaftCore's records`);
+        return keys;
+    };
     // builtin includes everything unless it says otherwise; a type file includes nothing unless it says otherwise
     const includes = chosen.hasInclude ? chosen.include : (section === "builtin" ? ["*"] : []);
 
@@ -200,24 +219,26 @@ export function resolveDeviceTypeSelection(merged: MergedDeviceTypeSources, sect
         let matched = false;
         for (const name of source ? [source] : names) {
             const records = (sources.get(name) as { records: Map<string, DevTypeJson> }).records;
-            const keys = key === "*" ? Array.from(records.keys()) : (records.has(key) ? [key] : []);
+            const keys = key.startsWith("@") ? setKeys(pattern, source, key, "include") :
+                (key === "*" ? Array.from(records.keys()) : (records.has(key) ? [key] : []));
             for (const k of keys) {
                 if (!candidates.has(k))
                     candidates.set(k, { named: [], any: [] });
                 const entry = candidates.get(k) as { named: string[]; any: string[] };
-                addTo(source && key !== "*" ? entry.named : entry.any, name);
+                addTo(source && key !== "*" && !key.startsWith("@") ? entry.named : entry.any, name);
                 matched = true;
             }
         }
-        if (!matched && key !== "*") {
+        if (!matched && key !== "*" && !key.startsWith("@")) {
             const where = source ? `source "${source}"` : "any source";
             throw new DeviceTypeSelectionError(`${section}.include "${pattern}": no record "${key}" in ${where}`);
         }
     }
     for (const pattern of chosen.exclude) {
         const [source, key] = parsePattern(pattern, names);
+        const excluded = key.startsWith("@") ? new Set(setKeys(pattern, source, key, "exclude")) : undefined;
         for (const k of Array.from(candidates.keys())) {
-            if (key === "*" || k === key) {
+            if (key === "*" || k === key || (excluded !== undefined && excluded.has(k))) {
                 const entry = candidates.get(k) as { named: string[]; any: string[] };
                 if (source === undefined) {
                     entry.named = [];

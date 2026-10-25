@@ -184,6 +184,7 @@ export interface DeviceTypeCatalogueInfo {
     recordFormat?: number;
     count: number;
     records: DeviceTypeCatalogueEntry[];
+    sets?: Record<string, string[]>;    // named sets of records ("raftcore:@<set>"), from RaftCore 1.63.0
 }
 
 export class RaftCoreCatalogue {
@@ -238,7 +239,7 @@ export class RaftCoreCatalogue {
                 throw new DeviceTypeSourceError("RaftCore catalogue: DeviceTypeRecords.json has no devTypes");
             this._records = devTypes;
         }
-        return { records: this._records, raftCore: this.raftCore };
+        return { records: this._records, raftCore: this.raftCore, sets: new Map(Object.entries(this.info.sets ?? {})) };
     }
 
     // One record's file, as it is in RaftCore

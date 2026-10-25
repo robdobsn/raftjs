@@ -19,6 +19,7 @@ const site = {
         { label: "main", raftCore: "1.62.0", count: 2 }, { label: "v1.61.0", raftCore: "1.61.0", count: 2 },
         { label: "v1.59.0", raftCore: "1.59.0", count: 1 }] }),
     [`${SITE}/v1.61.0/catalogue.json`]: JSON.stringify({ formatVersion: 1, label: "v1.61.0", raftCore: "1.61.0", recordFormat: 1, count: 2,
+        sets: { common: ["MCP9808"] },
         records: [{ key: "LSM6DS3", file: "records/LSM6DS3.json", sha256: "x", summary: { name: "IMU", hasData: true, customCode: false, initCode: false } },
                   { key: "MCP9808", file: "records/MCP9808.json", sha256: "y", summary: { name: "Temp", hasData: true, customCode: false, initCode: false } }] }),
     [`${SITE}/v1.61.0/DeviceTypeRecords.json`]: '{"devTypes":{"LSM6DS3":{"addresses":"0x6a","m":{"12.5":1,"26":2}},"MCP9808":{"addresses":"0x18"}}}',
@@ -39,6 +40,7 @@ describe("RaftCore's published catalogue", () => {
         const records = await catalogue.records();
         expect(writeDevTypeJson(records.records.get("LSM6DS3") ?? null)).toBe('{"addresses":"0x6a","m":{"12.5":1,"26":2}}');
         expect(records.raftCore).toBe("1.61.0");
+        expect(Array.from(records.sets?.entries() ?? [])).toEqual([["common", ["MCP9808"]]]);
         expect((await catalogue.recordFile("MCP9808")).text).toContain("0x18");
         await expect(catalogue.recordFile("Nope")).rejects.toThrow("no record");
         await expect(RaftCoreCatalogue.open(fetchFn, "v9.9.9", SITE)).rejects.toThrow("HTTP 404");
