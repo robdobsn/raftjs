@@ -163,6 +163,10 @@ export class DeviceManager implements RaftDeviceMgrIF{
     // System utils
     private _systemUtils: RaftSystemUtils | null = null;
 
+    // Whether the firmware sends an action's writes as one batch (devman/cmdraw hexWrs): unknown until the first
+    // action of several writes; firmware can change at a reboot or OTA, so it is found again for each subscription
+    private _cmdRawBatchSupported: boolean | undefined = undefined;
+
     // Device callbacks
     private _newDeviceCallbacks: Array<(deviceKey: string, state: DeviceState) => void> = [];
     private _newDeviceAttributeCallbacks: Array<(deviceKey: string, attrState: DeviceAttributeState) => void> = [];
@@ -258,6 +262,7 @@ export class DeviceManager implements RaftDeviceMgrIF{
         this._deviceTypeIdSeen = {};
         this._deviceInstanceData = {};
         this._typeCacheGeneration++;
+        this._cmdRawBatchSupported = undefined;
     }
 
     // Note the device type (index, or key from older firmware) of a record for a device. If the device has
@@ -324,6 +329,7 @@ export class DeviceManager implements RaftDeviceMgrIF{
 
         // Save the system utils
         this._systemUtils = systemUtils;
+        this._cmdRawBatchSupported = undefined;
         return true;
     }
 
@@ -1492,6 +1498,21 @@ export class DeviceManager implements RaftDeviceMgrIF{
             try {
                 const msgHandler = this._systemUtils?.getMsgHandler();
                 if (!msgHandler) return false;
+                // Several writes go as one batch (hexWrs) where the firmware supports it: sent together, with no poll
+                // of the device between them (e.g. an action that selects a register bank, writes and selects the
+                // normal bank again). Firmware without it ignores hexWrs (writing nothing) and its reply has no
+                // numWr, so the writes are then sent one at a time, and so from then on for this connection
+                if ((writes.length > 1) && (this._cmdRawBatchSupported !== false)) {
+                    const cmd = "devman/cmdraw?bus=" + devBus + "&addr=" + devAddr + "&hexWrs=" + writes.join(",");
+                    console.log(`DeviceManager sendAction ${action.n} ${cmd}`);
+                    const msgRslt = await msgHandler.sendRICRESTURL<RaftOKFail & { numWr?: number }>(cmd);
+                    if ((msgRslt.rslt === "ok") && (typeof msgRslt.numWr === "number")) {
+                        this._cmdRawBatchSupported = true;
+                        return msgRslt.numWr === writes.length;
+                    }
+                    if (msgRslt.rslt !== "ok") return false;
+                    this._cmdRawBatchSupported = false;
+                }
                 for (const hexWr of writes) {
                     const cmd = "devman/cmdraw?bus=" + devBus + "&addr=" + devAddr + "&hexWr=" + hexWr;
                     console.log(`DeviceManager sendAction ${action.n} ${cmd}`);

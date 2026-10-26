@@ -726,3 +726,57 @@ describe("DeviceManager identity fields (displayName, deviceName, deviceTypeKey,
         expect(deviceManager.getDeviceState("1_68").deviceTypeInfo?.role).toBeUndefined();
     });
 });
+
+describe("DeviceManager sendAction with several writes (devman/cmdraw hexWrs)", () => {
+    const action = { n: "LED", map: { on: "a950&7008&7483&a940", off: "a950&7000&7400&a940" } } as any;
+
+    function makeManager(reply: (cmd: string) => Record<string, unknown>) {
+        const sent: string[] = [];
+        const msgHandler = {
+            sendRICRESTURL: jest.fn(async (cmd: string) => { sent.push(cmd); return reply(cmd); })
+        };
+        const systemUtils = { getMsgHandler: () => msgHandler, getPublishTopicName: () => "devbin" } as unknown as RaftSystemUtils;
+        const deviceManager = new DeviceManager();
+        return { deviceManager, systemUtils, sent };
+    }
+
+    test("firmware with batches: one request with every write, and numWr confirms them", async () => {
+        const { deviceManager, systemUtils, sent } = makeManager((cmd) =>
+            cmd.includes("hexWrs=") ? { rslt: "ok", numWr: cmd.split("hexWrs=")[1].split(",").length } : { rslt: "ok" });
+        await deviceManager.setup(systemUtils);
+        expect(await deviceManager.sendAction("1_339", action, ["on"])).toBe(true);
+        expect(sent).toEqual(["devman/cmdraw?bus=1&addr=339&hexWrs=a950,7008,7483,a940"]);
+        expect(await deviceManager.sendAction("1_339", action, ["off"])).toBe(true);
+        expect(sent.length).toBe(2);
+    });
+
+    test("firmware without batches (no numWr in the reply): the writes are sent one at a time, then and after", async () => {
+        const { deviceManager, systemUtils, sent } = makeManager(() => ({ rslt: "ok" }));
+        await deviceManager.setup(systemUtils);
+        expect(await deviceManager.sendAction("1_339", action, ["on"])).toBe(true);
+        expect(sent).toEqual([
+            "devman/cmdraw?bus=1&addr=339&hexWrs=a950,7008,7483,a940",
+            "devman/cmdraw?bus=1&addr=339&hexWr=a950",
+            "devman/cmdraw?bus=1&addr=339&hexWr=7008",
+            "devman/cmdraw?bus=1&addr=339&hexWr=7483",
+            "devman/cmdraw?bus=1&addr=339&hexWr=a940"]);
+        sent.length = 0;
+        expect(await deviceManager.sendAction("1_339", action, ["off"])).toBe(true);
+        expect(sent.length).toBe(4);
+        expect(sent.every(cmd => cmd.includes("&hexWr="))).toBe(true);
+    });
+
+    test("a batch that fails on the device fails the action", async () => {
+        const { deviceManager, systemUtils } = makeManager(() => ({ rslt: "fail", error: "BUS_ACK_ERROR" }));
+        await deviceManager.setup(systemUtils);
+        expect(await deviceManager.sendAction("1_339", action, ["on"])).toBe(false);
+    });
+
+    test("an action of one write is sent as before", async () => {
+        const { deviceManager, systemUtils, sent } = makeManager(() => ({ rslt: "ok" }));
+        await deviceManager.setup(systemUtils);
+        const gain = { n: "gain", map: { "64x": "aa07" } } as any;
+        expect(await deviceManager.sendAction("1_339", gain, ["64x"])).toBe(true);
+        expect(sent).toEqual(["devman/cmdraw?bus=1&addr=339&hexWr=aa07"]);
+    });
+});
