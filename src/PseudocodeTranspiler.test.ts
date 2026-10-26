@@ -437,6 +437,21 @@ describe("array outputs in pseudocode", () => {
         errSpy.mockRestore();
     });
 
+    test("a scalar written twice in a sample has the last value, as in the firmware's decode", () => {
+        // A default, then the value when the reading is valid (the TCS34725 and TSL2591 records' pattern): one value
+        // per sample for every attribute, so the attributes stay aligned
+        const meta = makeMeta(2, ["lux", "raw", "valid"], "dflt",
+            "out.raw=buf[0];out.lux=0.0;out.valid=0;if(buf[1]==1){out.lux=buf[0]*2.5;out.valid=1;}");
+        expect(new CustomAttrHandler().handleAttr(meta, new Uint8Array([10, 1]), 0)).toEqual([[25], [10], [1]]);
+        expect(new CustomAttrHandler().handleAttr(meta, new Uint8Array([10, 0]), 0)).toEqual([[0], [10], [0]]);
+    });
+
+    test("each sample keeps its own last scalar write; an attribute a sample doesn't write gets no value", () => {
+        const meta = makeMeta(3, ["a", "b"], "persample",
+            "int i=0;while(i<3){out.a=0;out.a=buf[i];if(buf[i]>5){out.b=buf[i];}i++;next;}");
+        expect(new CustomAttrHandler().handleAttr(meta, new Uint8Array([4, 7, 9]), 0)).toEqual([[4, 7, 9], [7, 9]]);
+    });
+
     test("existing scalar decodes give the same results", () => {
         const meta = makeMeta(51, ["Red", "IR"], "max30101_fifo", PSEUDOCODE.max30101_fifo);
         const buf = new Uint8Array(51);

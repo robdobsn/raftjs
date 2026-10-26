@@ -462,6 +462,74 @@ h1 {
     background-color: #fff;
 }
 
+.device-colour {
+    padding: 10px;
+    border: 1px solid #666;
+    border-radius: 4px;
+    background-color: #282c34;
+    color: #fff;
+}
+
+.colour-body {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 16px;
+}
+
+.colour-swatch {
+    width: 6rem;
+    height: 6rem;
+    border-radius: 6px;
+    border: 1px solid #888;
+    flex: none;
+}
+
+.colour-channels {
+    flex: 1 1 14rem;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-size: 0.85rem;
+}
+
+.colour-channel {
+    display: grid;
+    grid-template-columns: 3.5rem 1fr 6.5rem;
+    align-items: center;
+    gap: 8px;
+}
+
+.colour-channel-bar {
+    height: 0.8rem;
+    background-color: #3a3f4b;
+    border-radius: 3px;
+    overflow: hidden;
+}
+
+.colour-channel-bar > div {
+    height: 100%;
+}
+
+.colour-channel-value {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+.device-lightspectrum {
+    padding: 10px;
+    border: 1px solid #666;
+    border-radius: 4px;
+    background-color: #282c34;
+    color: #fff;
+}
+
+.lightspectrum-chart {
+    min-height: 10rem;
+    height: 18vh;
+}
+
 .device-touchstrip {
     padding: 10px;
     border: 1px solid #666;
