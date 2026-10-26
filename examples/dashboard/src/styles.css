@@ -485,6 +485,109 @@ h1 {
     font-variant-numeric: tabular-nums;
 }
 
+.device-hrm {
+    padding: 10px;
+    border: 1px solid #666;
+    border-radius: 4px;
+    background-color: #282c34;
+    color: #fff;
+}
+
+.hrm-status {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.hrm-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+}
+
+.hrm-warning {
+    color: #ffb74d;
+}
+
+.hrm-tiles {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(8.5rem, 1fr));
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.hrm-tile {
+    padding: 6px 8px;
+    border-radius: 4px;
+    background-color: #323843;
+}
+
+.hrm-tile-label,
+.hrm-tile-sub {
+    font-size: 0.75rem;
+    opacity: 0.75;
+}
+
+.hrm-tile-value {
+    display: flex;
+    align-items: baseline;
+    gap: 4px;
+    font-size: 1.6rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.2;
+}
+
+.hrm-tile-units {
+    font-size: 0.8rem;
+    font-weight: normal;
+    opacity: 0.75;
+}
+
+.hrm-heart {
+    width: 1.2rem;
+    height: 1.2rem;
+    align-self: center;
+    fill: #e57373;
+    opacity: 0.4;
+}
+
+.hrm-heart-beating {
+    opacity: 1;
+    animation: hrm-beat 1s ease-out infinite;
+}
+
+@keyframes hrm-beat {
+    0% { transform: scale(1); }
+    15% { transform: scale(1.3); }
+    40% { transform: scale(1); }
+}
+
+.hrm-wave {
+    display: block;
+    width: 100%;
+    height: 8rem;
+}
+
+.hrm-axis,
+.hrm-trend-label {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.75rem;
+    opacity: 0.75;
+    font-variant-numeric: tabular-nums;
+}
+
+.hrm-trend-label {
+    margin-top: 6px;
+}
+
+.hrm-trend {
+    display: block;
+    width: 100%;
+    height: 3.5rem;
+}
+
 .device-zonegrid {
     padding: 10px;
     border: 1px solid #666;

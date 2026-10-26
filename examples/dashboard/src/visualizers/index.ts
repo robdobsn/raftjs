@@ -14,6 +14,7 @@ import ZoneGridVisualizer from './ZoneGridVisualizer';
 import StackLightVisualizer from './StackLightVisualizer';
 import DistanceStripVisualizer from './DistanceStripVisualizer';
 import TouchStripVisualizer from './TouchStripVisualizer';
+import HeartRateVisualizer from './HeartRateVisualizer';
 import { getAttrElemsPerSample } from '../../../../src/RaftDeviceInfo';
 
 VisualizerRegistry.register({
@@ -65,6 +66,20 @@ VisualizerRegistry.register({
         return 0;
     },
     component: TouchStripVisualizer,
+});
+
+VisualizerRegistry.register({
+    id: 'hrm',
+    placement: 'charts',
+    match: (item, deviceState) => {
+        if (item.kind !== 'attribute') return 0;
+        if (item.attribute.vt === 'hrm') return 100;
+        // Heuristic: one view for an HRM-class device (e.g. MAX30101), placed on its first attribute
+        const typeInfo = deviceState?.deviceTypeInfo;
+        if (typeInfo?.clas?.some(c => c.toUpperCase() === 'HRM') && typeInfo.resp?.a?.[0]?.n === item.attribute.n) return 50;
+        return 0;
+    },
+    component: HeartRateVisualizer,
 });
 
 VisualizerRegistry.register({
