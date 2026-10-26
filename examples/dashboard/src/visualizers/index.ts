@@ -15,6 +15,8 @@ import StackLightVisualizer from './StackLightVisualizer';
 import DistanceStripVisualizer from './DistanceStripVisualizer';
 import TouchStripVisualizer from './TouchStripVisualizer';
 import HeartRateVisualizer from './HeartRateVisualizer';
+import ColourVisualizer from './ColourVisualizer';
+import LightSpectrumVisualizer from './LightSpectrumVisualizer';
 import { getAttrElemsPerSample } from '../../../../src/RaftDeviceInfo';
 
 VisualizerRegistry.register({
@@ -29,6 +31,33 @@ VisualizerRegistry.register({
         return 0;
     },
     component: SpectrumChart,
+});
+
+VisualizerRegistry.register({
+    id: 'lightspectrum',
+    placement: 'charts',
+    match: (item) => {
+        if (item.kind !== 'attribute') return 0;
+        // Bands of a spectral light sensor, one bar per band in its wavelength's colour (e.g. AS7341)
+        if (item.attribute.vt === 'lightspectrum') return 100;
+        return 0;
+    },
+    component: LightSpectrumVisualizer,
+});
+
+VisualizerRegistry.register({
+    id: 'colour',
+    placement: 'charts',
+    match: (item, deviceState) => {
+        if (item.kind !== 'attribute') return 0;
+        const attr = item.attribute;
+        if (attr.vt === 'colour') return 100;
+        // Heuristic: one view for a device with red, green and blue attributes, placed on the red one
+        const names = new Set((deviceState?.deviceTypeInfo?.resp?.a ?? []).map(a => a.n));
+        if (attr.n === 'red' && names.has('green') && names.has('blue')) return 20;
+        return 0;
+    },
+    component: ColourVisualizer,
 });
 
 VisualizerRegistry.register({

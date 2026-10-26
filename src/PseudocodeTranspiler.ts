@@ -75,29 +75,35 @@ export function tokenize(code: string): Token[] {
     return tokens;
 }
 
-// Scalar writes (out.x = v) push straight onto attrValues. Array element writes
-// (out.x[i] = v) are staged per sample and flushed by __endSample() (from `next`, or
-// once at the end for decodes without `next`): each array attribute then contributes
-// exactly its element count, with unwritten elements 0 and out-of-range indices ignored.
+// Writes are staged per sample and flushed by __endSample() (from `next`, or once at the end
+// for decodes without `next`), as the firmware's compiled decode writes a sample's output
+// record and moves on at `next`. Scalar writes (out.x = v): the last value written in the
+// sample is the attribute's value, so a decode may set a default and then overwrite it; an
+// attribute the sample doesn't write gets no value. Array element writes (out.x[i] = v):
+// each array attribute contributes exactly its element count, with unwritten elements 0 and
+// out-of-range indices ignored.
 // __arrayElems (attribute name -> elements per sample) is passed in by the caller.
 const PREAMBLE =
     'let __sampleOpen = false;\n' +
     'let __stage = null;\n' +
+    'let __scalars = null;\n' +
     'const __arr = (typeof __arrayElems !== "undefined" && __arrayElems) ? __arrayElems : {};\n' +
-    'const out = new Proxy({}, { set(_, p, v) { if (attrValues[p]) { attrValues[p].push(v); __sampleOpen = true; } return true; } });\n' +
+    'const out = new Proxy({}, { set(_, p, v) { if (attrValues[p] && !__arr[p]) { if (!__scalars) __scalars = {}; ' +
+        '__scalars[p] = v; __sampleOpen = true; } return true; } });\n' +
     'function __setElem(n, i, v) { const len = __arr[n]; if (!len || !attrValues[n] || !Number.isFinite(i)) return; i = i | 0; ' +
         'if (!(i >= 0 && i < len)) return; if (!__stage) __stage = {}; if (!__stage[n]) __stage[n] = new Array(len).fill(0); ' +
         '__stage[n][i] = v; __sampleOpen = true; }\n' +
-    'function __endSample() { for (const n of Object.keys(__arr)) { if (!attrValues[n]) continue; ' +
+    'function __endSample() { if (__scalars) { for (const n of Object.keys(__scalars)) attrValues[n].push(__scalars[n]); } ' +
+        'for (const n of Object.keys(__arr)) { if (!attrValues[n]) continue; ' +
         'const s = (__stage && __stage[n]) ? __stage[n] : new Array(__arr[n]).fill(0); attrValues[n].push(...s); } ' +
-        '__stage = null; __sampleOpen = false; }\n' +
+        '__scalars = null; __stage = null; __sampleOpen = false; }\n' +
     'function toInt16(lo, hi) { const u = (hi << 8) | lo; return u & 0x8000 ? u - 0x10000 : u; }\n' +
     'function toInt32(b0, b1, b2, b3) { return (b3 << 24) | (b2 << 16) | (b1 << 8) | b0; }\n';
 
 // Run the decode body in its own function so an early `return` still reaches the final
 // flush; close a sample left open by a decode that never calls `next`
 const BODY_START = '(function () {\n';
-const BODY_END = '\n})();\nif (__sampleOpen && Object.keys(__arr).length > 0) __endSample();\n';
+const BODY_END = '\n})();\nif (__sampleOpen) __endSample();\n';
 
 // Index of the RBRACK matching the LBRACK at startIdx (-1 if unmatched)
 function findMatchingBracket(tokens: Token[], startIdx: number): number {
@@ -190,8 +196,7 @@ export function transpilePseudocodeToJs(pseudocode: string): string {
                 js += 'return ';
                 break;
             case 'NEXT':
-                // Scalars are pushed as they are written (out Proxy); this closes the
-                // sample for array attributes
+                // Closes the sample: its scalars and array attributes are pushed
                 js += '__endSample()';
                 break;
             default:
