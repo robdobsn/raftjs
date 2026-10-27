@@ -162,6 +162,7 @@ export interface DeviceTypeCatalogueSummary {
     hasData: boolean;
     customCode: boolean;
     initCode: boolean;
+    warning?: string;           // the record's _warning: what selecting it entails
 }
 
 export interface DeviceTypeCatalogueEntry {

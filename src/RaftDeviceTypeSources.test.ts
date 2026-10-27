@@ -47,6 +47,7 @@ describe("selection vectors", () => {
         expect(Object.fromEntries(result.replaced)).toEqual(vec.replaced);
         expect(Object.fromEntries(result.policyOnly)).toEqual(vec.policyOnly);
         expect(result.messages).toEqual(vec.messages);
+        expect(result.warnings).toEqual(vec.warnings);
         expect(writeDevTypeJson(result.provenance)).toBe(vec.provenance);
     });
 
