@@ -16,6 +16,8 @@ export function RecordView({ record, keyName }: { record: DevTypeJson | undefine
     const actions: any[] = info.actions ?? [];
     return (
         <>
+            {typeof plain._warning === "string" && plain._warning.trim() !== "" &&
+                <div className="notice warn"><b>Warning:</b> {plain._warning}</div>}
             <dl className="kv">
                 <dt>Key</dt><dd className="mono">{keyName}</dd>
                 {info.name && <><dt>Name</dt><dd>{info.name}</dd></>}
@@ -107,7 +109,9 @@ export function CataloguePanel() {
                 <div className="list">
                     {filtered.map((e) => (
                         <div key={e.key} className={`item ${e.key === current ? "active" : ""}`} onClick={() => setSelected(e.key)}>
-                            <div className="title">{e.summary.name ?? e.key}{bundled && m.includes(`${bundled}:${e.key}`) &&
+                            <div className="title">{e.summary.warning &&
+                                <span className="tag warn" title={e.summary.warning} style={{ marginRight: 6 }}>⚠ warning</span>}
+                                {e.summary.name ?? e.key}{bundled && m.includes(`${bundled}:${e.key}`) &&
                                 <span className="tag" style={{ marginLeft: 8 }}>in the type file</span>}</div>
                             <div className="muted">{e.key}{e.summary.manu ? ` · ${e.summary.manu}` : ""}{e.summary.addresses ? ` · ${e.summary.addresses}` : ""}</div>
                         </div>

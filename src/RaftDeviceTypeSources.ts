@@ -39,6 +39,7 @@ export interface MergedDeviceTypeSources {
     sources: Map<string, DevTypeJsonObject>;        // name -> spec, e.g. {"git": <url>, "ref": <ref>}
     sections: Record<DeviceTypeSection, DeviceTypeSectionSelection>;
     messages: string[];
+    acknowledge: string[];      // keys of records whose _warning has been accepted
 }
 
 export type DeviceTypeSourceKind = "bundled" | "path" | "git";
@@ -67,6 +68,7 @@ export interface DeviceTypeSelectionResult {
     replaced: Map<string, string[]>;                // key -> sources whose record a path source's replaced
     policyOnly: Map<string, DeviceTypePolicyName>;  // typeFile: policies for types not in the file (compiled types)
     messages: string[];
+    warnings: string[];                             // "<key>: <text>" - selected, enabled records with a _warning not acknowledged
     provenance: DevTypeJson;                        // what the records came from (a type file's _sources)
     fsImage: boolean;
 }
@@ -92,7 +94,7 @@ const emptySection = (): DeviceTypeSectionSelection => ({ include: [], exclude: 
 // Merge DeviceTypeSources.json files (Common's first, then the SysType's): sources are added (or replaced by name),
 // include and exclude lists joined, policies merged (the later file's win). name is used in error messages
 export function mergeDeviceTypeSources(files: Array<{ name: string; content: string | DevTypeJson }>): MergedDeviceTypeSources {
-    const merged: MergedDeviceTypeSources = { sources: new Map(), messages: [], sections: { builtin: emptySection(), typeFile: emptySection() } };
+    const merged: MergedDeviceTypeSources = { sources: new Map(), messages: [], acknowledge: [], sections: { builtin: emptySection(), typeFile: emptySection() } };
     for (const file of files) {
         const fail = (message: string): never => { throw new DeviceTypeSelectionError(`${file.name}: ${message}`); };
         let content: DevTypeJson;
@@ -105,9 +107,15 @@ export function mergeDeviceTypeSources(files: Array<{ name: string; content: str
             fail("expected a JSON object");
         const obj = content as DevTypeJsonObject;
         for (const key of obj.keys()) {
-            if (!["sources", "_notes", ...DEVICE_TYPE_SECTIONS].includes(key))
+            if (!["sources", "_notes", "acknowledge", ...DEVICE_TYPE_SECTIONS].includes(key))
                 fail(`unknown key "${key}"`);
         }
+        let acknowledge = obj.get("acknowledge") ?? [];
+        if (typeof acknowledge === "string")
+            acknowledge = [acknowledge];
+        if (!Array.isArray(acknowledge) || !acknowledge.every((k) => typeof k === "string"))
+            fail("acknowledge must be a list of record keys");
+        merged.acknowledge.push(...(acknowledge as string[]));
         const sources = obj.get("sources");
         if (isDevTypeJsonObject(sources)) {
             for (const [name, spec] of sources) {
@@ -177,7 +185,7 @@ function parsePattern(pattern: string, sourceNames: string[]): [string | undefin
 export function resolveDeviceTypeSelection(merged: MergedDeviceTypeSources, section: DeviceTypeSection,
                                            sourceRecords: Map<string, DeviceTypeSourceRecords>): DeviceTypeSelectionResult {
     const result: DeviceTypeSelectionResult = { records: new Map(), origin: new Map(), replaced: new Map(), policyOnly: new Map(),
-        messages: [...merged.messages], provenance: null, fsImage: merged.sections[section].fsImage };
+        messages: [...merged.messages], warnings: [], provenance: null, fsImage: merged.sections[section].fsImage };
     const sources = new Map<string, { records: Map<string, DevTypeJson>; isLocal: boolean }>();
     for (const [name, spec] of merged.sources) {
         const kind = deviceTypeSourceKind(spec);
@@ -213,14 +221,26 @@ export function resolveDeviceTypeSelection(merged: MergedDeviceTypeSources, sect
 
     // Candidates for each key: the sources it was selected from, and whether a source was named for it
     const candidates = new Map<string, { named: string[]; any: string[] }>();
+    const skipped = new Map<string, string>();
     const addTo = (list: string[], name: string) => { if (!list.includes(name)) list.push(name); };
     for (const pattern of includes) {
         const [source, key] = parsePattern(pattern, names);
         let matched = false;
         for (const name of source ? [source] : names) {
             const records = (sources.get(name) as { records: Map<string, DevTypeJson> }).records;
-            const keys = key.startsWith("@") ? setKeys(pattern, source, key, "include") :
+            let keys = key.startsWith("@") ? setKeys(pattern, source, key, "include") :
                 (key === "*" ? Array.from(records.keys()) : (records.has(key) ? [key] : []));
+            if (key === "*") {
+                // A wildcard doesn't select a record with a _warning (what selecting it entails): it's selected by
+                // naming it, or by acknowledging its warning
+                keys = keys.filter((k) => {
+                    const skip = deviceTypeRecordWarning(k, records.get(k) as DevTypeJson) !== undefined &&
+                        !merged.acknowledge.includes(k);
+                    if (skip && !skipped.has(k))
+                        skipped.set(k, name);
+                    return !skip;
+                });
+            }
             for (const k of keys) {
                 if (!candidates.has(k))
                     candidates.set(k, { named: [], any: [] });
@@ -251,6 +271,12 @@ export function resolveDeviceTypeSelection(merged: MergedDeviceTypeSources, sect
                     candidates.delete(k);
             }
         }
+    }
+
+    for (const [key, name] of skipped) {
+        if (!candidates.has(key))
+            result.messages.push(`"${key}" (in ${name}) has a warning, so "*" doesn't select it - include it by name, or add it ` +
+                `to "acknowledge", to select it`);
     }
 
     // One source for each key
@@ -301,8 +327,26 @@ export function resolveDeviceTypeSelection(merged: MergedDeviceTypeSources, sect
                 record.set("disable", value);
         }
     }
+    // Warnings of the selected, enabled records that aren't acknowledged
+    for (const [key, record] of result.records) {
+        const text = deviceTypeRecordWarning(key, record);
+        const disable = isDevTypeJsonObject(record) ? record.get("disable") : undefined;
+        if (text !== undefined && (disable === undefined || disable === false) && !merged.acknowledge.includes(key))
+            result.warnings.push(`${key}: ${text} (to accept it, add "${key}" to "acknowledge" in DeviceTypeSources.json)`);
+    }
     result.provenance = deviceTypeProvenance(merged, section, result.origin, sourceRecords);
     return result;
+}
+
+// A record's "_warning" (what selecting it, and so enabling it, entails - e.g. a general call sent on the bus), or
+// undefined. Not a non-empty string: an error
+export function deviceTypeRecordWarning(key: string, record: DevTypeJson): string | undefined {
+    if (!isDevTypeJsonObject(record) || !record.has("_warning"))
+        return undefined;
+    const value = record.get("_warning");
+    if (typeof value !== "string" || value.trim() === "")
+        throw new DeviceTypeSelectionError(`"${key}": _warning must be a non-empty string`);
+    return value.trim();
 }
 
 // What a selection's records came from (a type file's _sources): the sources that supplied a record - a git source

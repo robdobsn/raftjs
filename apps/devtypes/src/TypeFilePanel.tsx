@@ -66,6 +66,10 @@ export function TypeFilePanel() {
                         <span key={k} className="tag mono">{k}: {p} <button className="link" onClick={() => void m.setPolicy(k, undefined)} title="remove">×</button></span>
                     ))}
                 </div>
+                {(b.selection?.warnings ?? []).map((w) => <div key={w} className="notice warn">{w}</div>)}
+                {(m.selection.acknowledge ?? []).length > 0 &&
+                    <p className="muted">Warnings accepted for: {(m.selection.acknowledge ?? []).join(", ")}</p>}
+                {(b.selection?.messages ?? []).map((msg) => <p key={msg} className="muted">{msg}</p>)}
                 {((tf.include ?? []).length > 0 || Object.keys(tf.policy ?? {}).length > 0) &&
                     <button className="btn" onClick={() => void m.clearSelection()}>Clear</button>}
             </div>

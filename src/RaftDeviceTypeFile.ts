@@ -93,7 +93,7 @@ function withoutTopLevel(record: DevTypeJson, ...keys: string[]): DevTypeJson {
 }
 
 function comparable(record: DevTypeJson): string {
-    return writeDevTypeJson(withoutTopLevel(record, "_notes", "deviceType"), { sortKeys: true });
+    return writeDevTypeJson(withoutTopLevel(record, "_notes", "_warning", "deviceType"), { sortKeys: true });
 }
 
 // The response layout as the firmware compares it (DeviceTypeRecords::sameResponseLayout): resp as compact JSON
@@ -199,7 +199,7 @@ export function buildTypeFile(input: TypeFileBuildInput, compiled: Map<string, D
             entry.decoder = isDevTypeJsonObject(resp) && resp.has("c") ? "none" : "runtime";
         }
         entries.push(entry);
-        devTypes.set(key, withoutTopLevel(record, "_notes"));
+        devTypes.set(key, withoutTopLevel(record, "_notes", "_warning"));
     }
     for (const [key, policy] of input.policyOnly ?? new Map<string, DeviceTypePolicyName>()) {
         if (!compiled.has(key))

@@ -18,6 +18,9 @@ import HeartRateVisualizer from './HeartRateVisualizer';
 import ColourVisualizer from './ColourVisualizer';
 import LightSpectrumVisualizer from './LightSpectrumVisualizer';
 import ThermalCameraVisualizer from './ThermalCameraVisualizer';
+import ImuVisualizer from './ImuVisualizer';
+import AngleVisualizer from './AngleVisualizer';
+import { imuMatchScore } from './imuMath';
 import { getAttrElemsPerSample } from '../../../../src/RaftDeviceInfo';
 
 VisualizerRegistry.register({
@@ -125,6 +128,34 @@ VisualizerRegistry.register({
         return 0;
     },
     component: HeartRateVisualizer,
+});
+
+VisualizerRegistry.register({
+    id: 'imu',
+    placement: 'charts',
+    match: (item, deviceState) => {
+        if (item.kind !== 'attribute') return 0;
+        if (!deviceState) return item.attribute.vt === 'imu' ? 100 : 0;
+        // One view per device: on the (first) vt "imu" attribute (100), else heuristically on the first attribute of
+        // an accelerometer (ax/ay/az), gyro (gx/gy/gz) or magnetometer (mx/my/mz, or x/y/z in µT/gauss) found (30)
+        return imuMatchScore(item.attribute.n, deviceState.deviceTypeInfo?.resp?.a ?? []);
+    },
+    component: ImuVisualizer,
+});
+
+VisualizerRegistry.register({
+    id: 'angle',
+    placement: 'charts',
+    match: (item, deviceState) => {
+        if (item.kind !== 'attribute') return 0;
+        const attr = item.attribute;
+        if (attr.vt === 'angle') return 100;
+        // Heuristic: an angle in degrees of an ANG-class device (a rotary position sensor, e.g. AS5600, MT6701)
+        const isANG = deviceState?.deviceTypeInfo?.clas?.some(c => c.toUpperCase() === 'ANG');
+        if (isANG && /^(degrees|deg|&deg;|°)$/i.test(attr.u ?? '')) return 30;
+        return 0;
+    },
+    component: AngleVisualizer,
 });
 
 VisualizerRegistry.register({

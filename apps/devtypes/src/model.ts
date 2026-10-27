@@ -6,7 +6,7 @@ import {
     DeviceTypeFileManager, DeviceTypePolicyName, DeviceTypeRecordFile, DeviceTypeSelectionResult, DeviceTypeSourceRecords,
     DeviceTypeSourceRecordsWithFiles, DevManTypeTableEntry, MergedDeviceTypeSources, RaftConnEvent, RaftConnector, RaftCoreCatalogue,
     RaftSystemUtils, TYPE_FILE_MAX_BYTES_DEFAULT_PSRAM, TypeFileBuildResult, checkDeviceTypeRecordCode, TypeFilePushResult, TypeFilePushStage, TypeFileResponse, buildTypeFile,
-    deviceTypeLockText, deviceTypeSourceKind, devTypeJsonFromPlain, devTypeJsonGet, devTypeJsonToPlain, isDevTypeJsonObject,
+    deviceTypeLockText, deviceTypeRecordWarning, deviceTypeSourceKind, devTypeJsonFromPlain, devTypeJsonGet, devTypeJsonToPlain, isDevTypeJsonObject,
     mergeDeviceTypeSources, parseDevTypeJson, readGitHubSource, recordsFromFiles, resolveDeviceTypeSelection, sha256Hex,
     writeDevTypeJson, RAFTCORE_PAGES_CATALOGUE_URL,
 } from "../../../src/main";
@@ -14,7 +14,8 @@ import SystemTypeDevTypes from "./SystemTypeDevTypes";
 import { joinPath, makeZip, parseAddresses, readStore, writeStore } from "./util";
 
 export interface SectionSpec { include?: string[]; exclude?: string[]; policy?: Record<string, DeviceTypePolicyName>; fsImage?: boolean }
-export interface SourcesFile { sources: Record<string, Record<string, unknown>>; builtin?: SectionSpec; typeFile: SectionSpec }
+export interface SourcesFile { sources: Record<string, Record<string, unknown>>; builtin?: SectionSpec; typeFile: SectionSpec;
+    acknowledge?: string[] }
 
 // Records the user picked for a path source (kept in the browser)
 export interface LocalSourceFiles { files: DeviceTypeRecordFile[]; asFolder: boolean }
@@ -275,8 +276,46 @@ export class DevTypesModel {
         return (this.selection.typeFile.include ?? []).includes(pattern);
     }
 
+    // Asks whether to go ahead with records that have a _warning (replaceable for scripted tests)
+    confirmWarnings: (text: string) => boolean = (text) => window.confirm(text);
+
+    // The records a pattern names that have a _warning ("<source>:<key>" or "<key>"; a wildcard doesn't select them)
+    patternWarnings(pattern: string): Array<[string, string]> {
+        const colon = pattern.indexOf(":");
+        const source = colon >= 0 ? pattern.slice(0, colon) : undefined;
+        const key = colon >= 0 ? pattern.slice(colon + 1) : pattern;
+        if (key === "*" || key.startsWith("@"))
+            return [];
+        const out: Array<[string, string]> = [];
+        this.sourceRecords.forEach((loaded, name) => {
+            const record = (source === undefined || source === name) ? loaded.records.get(key) : undefined;
+            let text: string | undefined;
+            try {
+                text = record !== undefined ? deviceTypeRecordWarning(key, record) : undefined;
+            } catch {
+                text = undefined;
+            }
+            if (text !== undefined && !out.some(([k]) => k === key))
+                out.push([key, text]);
+        });
+        return out;
+    }
+
     async toggleInclude(pattern: string, on: boolean) {
         const tf = this.selection.typeFile;
+        // A record with a warning (what selecting it entails) is added only once the warning is accepted, which is
+        // kept in the selection's acknowledge list (so the build doesn't report it again); removing it drops that
+        const warnings = this.patternWarnings(pattern);
+        if (on && warnings.length > 0 && !this.confirmWarnings(warnings.map(([k, t]) => `${k}: ${t}`).join("\n\n") +
+                "\n\nAdd it to the type file?"))
+            return;
+        const acknowledge = (this.selection.acknowledge ?? []).filter((k) => !warnings.some(([w]) => w === k));
+        if (on)
+            acknowledge.push(...warnings.map(([k]) => k));
+        if (acknowledge.length)
+            this.selection.acknowledge = acknowledge;
+        else
+            delete this.selection.acknowledge;
         tf.include = (tf.include ?? []).filter((p) => p !== pattern);
         if (on)
             tf.include.push(pattern);
@@ -324,6 +363,8 @@ export class DevTypesModel {
                 return out;
             };
             this.selection = { sources, builtin: section(merged.sections.builtin), typeFile: section(merged.sections.typeFile) };
+            if (merged.acknowledge.length)
+                this.selection.acknowledge = [...merged.acknowledge];
             if (!this.selection.typeFile.include)
                 this.selection.typeFile.include = [];
             this.lockedCommits = {};
