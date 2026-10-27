@@ -552,6 +552,20 @@ h1 {
     image-rendering: auto;
 }
 
+.zonegrid-grid.thermal-values {
+    width: min(100%, 26rem);
+}
+
+.zonegrid-grid.thermal-values-dense {
+    width: min(100%, 52rem);
+    gap: 1px;
+}
+
+.thermal-values-dense .zonegrid-cell {
+    font-size: 0.5rem;
+    border-radius: 1px;
+}
+
 .thermal-scale {
     display: flex;
     flex-direction: column;

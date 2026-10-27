@@ -11,6 +11,10 @@
 //   ambientAttr  name of a scalar attribute with the sensor's own (ambient) temperature, shown with the others
 //   flipX/flipY  initial mirroring (whether the image is seen from the sensor or towards it depends on the optics)
 //
+// Two views: "image" - the pixels as a false-colour picture, smoothed or as blocks - and "values" - a grid of the
+// pixels' temperatures, each cell coloured blue (cold) to red (hot) by its level in the frame. It opens with values
+// for a small grid (up to 16x16, e.g. AMG8833) and the image for a larger one (MLX90640).
+//
 // Values below -100 (e.g. a pixel the device couldn't work out) are treated as missing and drawn black.
 //
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -75,12 +79,22 @@ export function thermalColour(pos: number): [number, number, number] {
 
 const MISSING_BELOW_C = -100;
 const DISPLAY_W = 480;
+const VALUES_VIEW_MAX_SIDE = 16;
+
+type ThermalView = 'image' | 'values';
+
+// Blue (cold) -> red (hot) for a 0..1 fraction (as the zone grid)
+function levelColour(frac: number): string {
+    const f = Math.min(1, Math.max(0, frac));
+    return `hsl(${Math.round(240 * (1 - f))}, 75%, 45%)`;
+}
 
 const ThermalCameraVisualizer: React.FC<DeviceVisualizerProps> = memo(({ deviceKey, attribute }) => {
     const opts: ThermalOptions = ((attribute as any)?.vo ?? {}) as ThermalOptions;
     const [flipX, setFlipX] = useState<boolean>(!!opts.flipX);
     const [flipY, setFlipY] = useState<boolean>(!!opts.flipY);
     const [smooth, setSmooth] = useState<boolean>(true);
+    const [view, setView] = useState<ThermalView | null>(null);
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
     const deviceManager = connManager.getConnector().getSystemType()?.deviceMgrIF;
@@ -101,11 +115,12 @@ const ThermalCameraVisualizer: React.FC<DeviceVisualizerProps> = memo(({ deviceK
     const centreValid = centreCells.filter(v => Number.isFinite(v) && v >= MISSING_BELOW_C);
     const centreC = centreValid.length ? centreValid.reduce((a, b) => a + b, 0) / centreValid.length : NaN;
     const ambientC = opts.ambientAttr ? latestSample(deviceState?.deviceAttributes[opts.ambientAttr])[0] : undefined;
+    const shownView: ThermalView = view ?? (Math.max(cols, rows) <= VALUES_VIEW_MAX_SIDE ? 'values' : 'image');
 
     // Draw: the grid at one canvas pixel per sensor pixel, scaled up by the browser (smoothly or as blocks)
     useEffect(() => {
         const canvas = canvasRef.current;
-        if (!canvas || pixels.length < cols * rows) return;
+        if (shownView !== 'image' || !canvas || pixels.length < cols * rows) return;
         const off = document.createElement('canvas');
         off.width = cols;
         off.height = rows;
@@ -138,6 +153,26 @@ const ThermalCameraVisualizer: React.FC<DeviceVisualizerProps> = memo(({ deviceK
     const fmt = (v: number | undefined) => (v !== undefined && Number.isFinite(v) ? `${v.toFixed(1)} °C` : '-');
     const barStops = PALETTE_STOPS.map(([p, r, g, b]) => `rgb(${r},${g},${b}) ${p * 100}%`).join(', ');
 
+    // Values view: cells in display order (row by row, optionally mirrored)
+    const cells: JSX.Element[] = [];
+    if (shownView === 'values') {
+        for (let r = 0; r < rows; r++) {
+            for (let c = 0; c < cols; c++) {
+                const srcRow = flipY ? rows - 1 - r : r;
+                const srcCol = flipX ? cols - 1 - c : c;
+                const i = srcRow * cols + srcCol;
+                const v = pixels[i];
+                const ok = Number.isFinite(v) && v >= MISSING_BELOW_C;
+                cells.push(
+                    <div key={`${r}_${c}`} className="zonegrid-cell" style={{ backgroundColor: ok ? levelColour((v - minC) / span) : '#444' }}
+                        title={`pixel ${i} (row ${srcRow}, column ${srcCol}): ${ok ? v.toFixed(2) + ' °C' : '-'}`}>
+                        {ok ? Math.round(v) : '–'}
+                    </div>
+                );
+            }
+        }
+    }
+
     return (
         <div className="device-thermal">
             <div className="zonegrid-header">
@@ -146,18 +181,31 @@ const ThermalCameraVisualizer: React.FC<DeviceVisualizerProps> = memo(({ deviceK
                 <span>max {fmt(maxC)}</span>
                 <span>centre {fmt(centreC)}</span>
                 {ambientC !== undefined && <span>sensor {fmt(ambientC)}</span>}
-                <label><input type="checkbox" checked={smooth} onChange={e => setSmooth(e.target.checked)} />smooth</label>
+                <select value={shownView} onChange={e => setView(e.target.value as ThermalView)}>
+                    <option value="image">image</option>
+                    <option value="values">values</option>
+                </select>
+                {shownView === 'image' && (
+                    <label><input type="checkbox" checked={smooth} onChange={e => setSmooth(e.target.checked)} />smooth</label>
+                )}
                 <label><input type="checkbox" checked={flipX} onChange={e => setFlipX(e.target.checked)} />flip X</label>
                 <label><input type="checkbox" checked={flipY} onChange={e => setFlipY(e.target.checked)} />flip Y</label>
             </div>
-            <div className="thermal-body">
-                <canvas ref={canvasRef} className="thermal-canvas" width={DISPLAY_W} height={Math.round((DISPLAY_W * rows) / cols)} />
-                <div className="thermal-scale">
-                    <span>{fmt(maxC)}</span>
-                    <div className="thermal-scale-bar" style={{ background: `linear-gradient(to top, ${barStops})` }} />
-                    <span>{fmt(minC)}</span>
+            {shownView === 'image' ? (
+                <div className="thermal-body">
+                    <canvas ref={canvasRef} className="thermal-canvas" width={DISPLAY_W} height={Math.round((DISPLAY_W * rows) / cols)} />
+                    <div className="thermal-scale">
+                        <span>{fmt(maxC)}</span>
+                        <div className="thermal-scale-bar" style={{ background: `linear-gradient(to top, ${barStops})` }} />
+                        <span>{fmt(minC)}</span>
+                    </div>
                 </div>
-            </div>
+            ) : (
+                <div className={`zonegrid-grid thermal-values${cols > VALUES_VIEW_MAX_SIDE ? ' thermal-values-dense' : ''}`}
+                    style={{ gridTemplateColumns: `repeat(${cols}, 1fr)`, gridTemplateRows: `repeat(${rows}, 1fr)`, aspectRatio: `${cols} / ${rows}` }}>
+                    {cells}
+                </div>
+            )}
         </div>
     );
 });
