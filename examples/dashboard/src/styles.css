@@ -1868,3 +1868,145 @@ h1 {
     cursor: pointer;
     white-space: nowrap;
 }
+
+.device-imu {
+    padding: 10px;
+    border: 1px solid #666;
+    border-radius: 4px;
+    background-color: #282c34;
+    color: #fff;
+}
+
+.imu-body {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+}
+
+.imu-section {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 0.8rem;
+    width: 200px;
+    max-width: 100%;
+}
+
+.imu-section-title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-weight: bold;
+}
+
+.imu-section-title button {
+    font-weight: normal;
+    font-size: 0.75rem;
+}
+
+.imu-canvas {
+    display: block;
+    max-width: 100%;
+    border: 1px solid #555;
+    border-radius: 4px;
+    background-color: #1e2128;
+    cursor: grab;
+    touch-action: none;
+}
+
+.imu-readout {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px 10px;
+    font-variant-numeric: tabular-nums;
+}
+
+.imu-units {
+    opacity: 0.7;
+}
+
+.imu-rates {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.imu-rate {
+    display: grid;
+    grid-template-columns: 2rem 1fr 3.5rem;
+    align-items: center;
+    gap: 6px;
+}
+
+.imu-rate-bar {
+    position: relative;
+    height: 0.6rem;
+    background-color: #3a3f4b;
+    border-radius: 3px;
+    overflow: hidden;
+}
+
+.imu-rate-bar::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background-color: rgba(255, 255, 255, 0.4);
+}
+
+.imu-rate-bar > div {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+}
+
+.imu-rate-value {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+/* Angle visualizer (rotary position sensors) */
+.device-angle {
+    padding: 10px;
+    border: 1px solid #666;
+    border-radius: 4px;
+    background-color: #282c34;
+    color: #fff;
+}
+
+.angle-body {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 16px;
+}
+
+.angle-dial {
+    flex: none;
+}
+
+.angle-readout {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-size: 0.9rem;
+}
+
+.angle-status {
+    padding: 0 6px;
+    border-radius: 8px;
+    font-size: 0.8rem;
+}
+
+.angle-status-ok { background-color: #2e7d32; }
+.angle-status-none, .angle-status-weak, .angle-status-strong { background-color: #b26a00; }
+
+.angle-invalid {
+    color: #ffb74d;
+}
+
+.angle-reset {
+    align-self: flex-start;
+}
