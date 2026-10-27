@@ -13,6 +13,9 @@ import { DeviceAttributesState, DeviceTimeline } from "./RaftDeviceStates";
 import { structSizeOf, structUnpack } from "./RaftStruct";
 import RaftUtils from "./RaftUtils";
 
+// Most values kept for one array attribute (whole samples; single-value attributes keep maxDataPoints samples)
+export const MAX_ARRAY_ATTR_VALUES = 50000;
+
 // Optional diagnostic context for attribute decoding. When provided, the
 // handler emits a detailed warning if an attribute would read past the
 // declared sample boundary or the end of the message buffer. This is used to
@@ -197,9 +200,13 @@ export default class AttributeHandler {
                 };
             }
 
-            // Check if any data points need to be discarded (sample-aligned for array attributes)
+            // Check if any data points need to be discarded (sample-aligned for array attributes). An array
+            // attribute keeps at most MAX_ARRAY_ATTR_VALUES values (at least its latest sample): a thermal camera's
+            // 768 pixels x 1000 samples would be 768,000 values, each new sample then shifting them all
             const attrElems = elemsPerSample[attrIdx];
-            const maxValues = maxDataPoints * attrElems;
+            const maxValues = attrElems > 1 ?
+                Math.max(attrElems, Math.min(maxDataPoints, Math.floor(MAX_ARRAY_ATTR_VALUES / attrElems)) * attrElems) :
+                maxDataPoints;
             let discardCount = Math.max(0, devAttrsState[attrDef.n].values.length + newAttrValues[attrIdx].length - maxValues);
             if (discardCount > 0) {
                 discardCount = Math.ceil(discardCount / attrElems) * attrElems;

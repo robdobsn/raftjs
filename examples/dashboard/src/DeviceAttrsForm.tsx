@@ -1,8 +1,12 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { deviceAttrGetLatestFormatted, DeviceState } from '../../../src/RaftDeviceStates';
 import ConnManager from './ConnManager';
 
 const connManager = ConnManager.getInstance();
+
+// Array attributes with more elements than this per sample (e.g. a thermal camera's pixels) start collapsed,
+// showing only their element count until expanded
+const ARRAY_COLLAPSE_THRESHOLD = 10;
 
 type DeviceAttributesTableProps = {
     deviceKey: string;
@@ -12,6 +16,17 @@ type DeviceAttributesTableProps = {
 const DeviceAttrsForm: React.FC<DeviceAttributesTableProps> = ({ deviceKey, lastUpdated }) => {
     const deviceManager = connManager.getConnector().getSystemType()?.deviceMgrIF;
     const deviceState: DeviceState | undefined = deviceManager?.getDeviceState(deviceKey);
+
+    // Large arrays the user has expanded (by attribute name)
+    const [expanded, setExpanded] = useState<Set<string>>(new Set());
+    const toggleExpanded = (attributeName: string) => {
+        setExpanded(prev => {
+            const next = new Set(prev);
+            if (next.has(attributeName)) next.delete(attributeName);
+            else next.add(attributeName);
+            return next;
+        });
+    };
 
     if (!deviceState || Object.keys(deviceState.deviceAttributes).length === 0) {
         return <></>;
@@ -31,11 +46,22 @@ const DeviceAttrsForm: React.FC<DeviceAttributesTableProps> = ({ deviceKey, last
                     {Object.entries(deviceState.deviceAttributes)
                         .filter(([attributeName, attributeDetails]) => attributeDetails.visibleForm !== false)
                         .map(([attributeName, attributeDetails]) => {
-                            const valStr = deviceAttrGetLatestFormatted(attributeDetails)
+                            const numElems = attributeDetails.elemsPerSample ?? 1;
+                            const collapsible = numElems > ARRAY_COLLAPSE_THRESHOLD;
+                            const isExpanded = collapsible && expanded.has(attributeName);
+                            const valStr = collapsible && !isExpanded ? '' : deviceAttrGetLatestFormatted(attributeDetails);
                             return (
                                 <tr key={attributeName}>
                                     <td>{attributeName}</td>
-                                    <td>{valStr}</td>
+                                    <td>
+                                        {collapsible && (
+                                            <button type="button" className="attr-array-toggle" onClick={() => toggleExpanded(attributeName)}
+                                                    title={isExpanded ? 'Hide the values' : 'Show the values'}>
+                                                {isExpanded ? '\u25BE' : '\u25B8'} {numElems} values
+                                            </button>
+                                        )}
+                                        {valStr}
+                                    </td>
                                     <td>{attributeDetails.units}</td>
                                 </tr>
                             );

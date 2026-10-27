@@ -1,4 +1,4 @@
-import AttributeHandler from "./RaftAttributeHandler";
+import AttributeHandler, { MAX_ARRAY_ATTR_VALUES } from "./RaftAttributeHandler";
 import { getAttrElemsPerSample, DeviceTypePollRespMetadata } from "./RaftDeviceInfo";
 import { DeviceAttributesState, DeviceAttributeState, DeviceTimeline, deviceAttrGetLatestFormatted, deviceAttrValueLabel } from "./RaftDeviceStates";
 
@@ -118,6 +118,37 @@ describe("processMsgAttrGroup with array attribute", () => {
         // Oldest remaining sample must be a complete group (poll 2 onwards)
         expect(devAttrsState["bands"].values.slice(0, 9)).toEqual(Array(9).fill(2));
         expect(devAttrsState["bands"].values.slice(-9)).toEqual(Array(9).fill(4));
+    });
+});
+
+describe("stored values of a large array attribute", () => {
+    test("a thermal camera's pixels keep at most MAX_ARRAY_ATTR_VALUES values (whole samples); scalars keep maxDataPoints", () => {
+        // MLX90640-like: ambient int16 then 768 int16 pixels
+        const meta: DeviceTypePollRespMetadata = {
+            b: 2 + 768 * 2,
+            a: [
+                { n: "ambient", t: "<h", u: "C", r: [-40, 85], d: 100, f: ".2f", o: "float" },
+                { n: "temperature", t: "<h[768]", u: "C", r: [-40, 300], d: 100, f: ".2f", o: "float" }
+            ]
+        };
+        const handler = new AttributeHandler();
+        const timeline = newTimeline();
+        const devAttrsState: DeviceAttributesState = {};
+        const maxDataPoints = 1000;
+        const keptSamples = Math.floor(MAX_ARRAY_ATTR_VALUES / 768);
+        for (let frame = 0; frame < keptSamples + 10; frame++) {
+            const msg = new Uint8Array(2 + meta.b);
+            msg[0] = (frame >> 8) & 0xff;
+            msg[1] = frame & 0xff;
+            msg[2] = frame & 0xff;                      // ambient
+            for (let i = 0; i < 768; i++) msg[4 + i * 2] = frame & 0xff;
+            handler.processMsgAttrGroup(msg, 0, timeline, meta, devAttrsState, maxDataPoints);
+        }
+        expect(devAttrsState["temperature"].values.length).toBe(keptSamples * 768);
+        expect(devAttrsState["ambient"].values.length).toBe(keptSamples + 10);
+        // The oldest kept sample is whole, and the latest is the last frame
+        expect(devAttrsState["temperature"].values.slice(0, 768)).toEqual(Array(768).fill(10 / 100));
+        expect(devAttrsState["temperature"].values.slice(-768)).toEqual(Array(768).fill((keptSamples + 9) / 100));
     });
 });
 

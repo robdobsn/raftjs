@@ -17,6 +17,7 @@ import TouchStripVisualizer from './TouchStripVisualizer';
 import HeartRateVisualizer from './HeartRateVisualizer';
 import ColourVisualizer from './ColourVisualizer';
 import LightSpectrumVisualizer from './LightSpectrumVisualizer';
+import ThermalCameraVisualizer from './ThermalCameraVisualizer';
 import { getAttrElemsPerSample } from '../../../../src/RaftDeviceInfo';
 
 VisualizerRegistry.register({
@@ -58,6 +59,21 @@ VisualizerRegistry.register({
         return 0;
     },
     component: ColourVisualizer,
+});
+
+VisualizerRegistry.register({
+    id: 'thermal',
+    placement: 'charts',
+    match: (item, deviceState) => {
+        if (item.kind !== 'attribute') return 0;
+        const attr = item.attribute;
+        if (attr.vt === 'thermal') return 100;
+        // Heuristic: the pixel array of a thermal camera (TCAM class, e.g. AMG8833) - ahead of the zone grid
+        const isTCAM = deviceState?.deviceTypeInfo?.clas?.some(c => c.toUpperCase() === 'TCAM');
+        if (isTCAM && attr.t && getAttrElemsPerSample(attr.t) > 1) return 30;
+        return 0;
+    },
+    component: ThermalCameraVisualizer,
 });
 
 VisualizerRegistry.register({
