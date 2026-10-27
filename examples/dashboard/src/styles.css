@@ -1845,3 +1845,12 @@ h1 {
   color: #e57373;
 }
 
+.attr-array-toggle {
+    background: none;
+    border: none;
+    color: inherit;
+    font: inherit;
+    padding: 0 6px 0 0;
+    cursor: pointer;
+    white-space: nowrap;
+}
