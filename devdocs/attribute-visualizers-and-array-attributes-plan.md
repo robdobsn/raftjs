@@ -4,6 +4,15 @@
 
 All five phases implemented and verified on hardware 2026-08-14 (see "Implementation status" below).
 
+Later (August - October 2026), the registry gained visualizers for more device types: `vcpcal`, `zonegrid`/`heatmap`,
+`stacklight`, `diststrip`, `touchstrip`, `hrm`, `colour`, `lightspectrum`, and after raftjs 2.11.0 `thermal`
+(an image view and a values view, chosen for a `TCAM` device's array), `imu` and `angle` (chosen for `ANG` devices).
+Each takes options from the attribute's `vo` field; RaftCore records set `vt`/`vo` (e.g. AS5600, LSM6DS3,
+MMC5603, AMG8833). Array attributes now keep at most 50,000 stored values (`MAX_ARRAY_ATTR_VALUES` in
+RaftAttributeHandler.ts), and the dashboard's value table starts arrays of more than 10 elements collapsed. The
+list of `vt` ids, their fallback rules and `vo` keys is on the wiki's Device Type Record Format page (Visualizer
+hints).
+
 ## Implementation status (2026-08-14)
 
 - **Phase 1 (raftjs) — done.** `getAttrElemsPerSample()` in [RaftDeviceInfo.ts](../src/RaftDeviceInfo.ts);
