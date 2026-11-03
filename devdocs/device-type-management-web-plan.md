@@ -4,7 +4,11 @@
 
 Decisions W1-W9 made 2026-10-24 (§9). **Phases 1-6 implemented 2026-10-24** (§11), except the on-hardware checks
 (no board was attached): RaftCore firmware fields, `_sources`, `--pages` and the Pages workflow; raftjs's type file,
-grammar, selection, catalogue and device workflow modules; the Device Types app (`apps/devtypes`). Not committed.
+grammar, selection, catalogue and device workflow modules; the Device Types app (`apps/devtypes`). Merged in
+raftjs PR #21 (2026-10-24). Since then (2026-10-27, after raftjs 2.11.0): record warnings - a record's `_warning`
+(RaftCore #35) keeps it out of a wildcard selection unless the selection's `acknowledge` lists it, a record selected
+by name is reported in `DeviceTypeSelectionResult.warnings`, `_warning` is left out of type files, and the app
+marks such records and asks before adding one to the type file (adding it to `acknowledge`).
 
 Companion documents:
 
