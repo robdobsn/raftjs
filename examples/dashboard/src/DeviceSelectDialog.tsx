@@ -55,11 +55,14 @@ export interface DeviceLogEntry {
 interface DeviceSelectDialogProps {
   entries: DeviceLogEntry[];
   format: string;
+  minRateMs?: number;     // the fastest log rate allowed (a low-power session logs at most once a second)
   onSave: (entries: DeviceLogEntry[]) => void;
   onCancel: () => void;
 }
 
-export default function DeviceSelectDialog({ entries, format, onSave, onCancel }: DeviceSelectDialogProps) {
+export default function DeviceSelectDialog({ entries, format, minRateMs, onSave, onCancel }: DeviceSelectDialogProps) {
+  // A rate is allowed if it is no faster than minRateMs ("Max (poll rate)", 0, is the fastest of all)
+  const rateAllowed = (ms: number) => !minRateMs || (ms >= minRateMs);
   const [localEntries, setLocalEntries] = useState<DeviceLogEntry[]>(
     entries.map(e => ({ ...e, selectedAttrs: [...e.selectedAttrs] }))
   );
@@ -145,7 +148,7 @@ export default function DeviceSelectDialog({ entries, format, onSave, onCancel }
                       }}
                     >
                       {RATE_PRESETS.map(p => (
-                        <option key={p.ms} value={p.ms}>{p.label}</option>
+                        <option key={p.ms} value={p.ms} disabled={!rateAllowed(p.ms)}>{p.label}</option>
                       ))}
                       {!RATE_PRESETS.find(p => p.ms === entry.rateMs) && (
                         <option value="custom">Custom</option>
@@ -164,7 +167,7 @@ export default function DeviceSelectDialog({ entries, format, onSave, onCancel }
                       value={msToSliderValue(entry.rateMs)}
                       onChange={e => {
                         const ms = sliderValueToMs(parseFloat(e.target.value));
-                        setRate(idx, ms);
+                        setRate(idx, minRateMs && (ms < minRateMs) ? minRateMs : ms);
                       }}
                     />
                     <span className="log-config-slider-label">Slow</span>
@@ -172,6 +175,9 @@ export default function DeviceSelectDialog({ entries, format, onSave, onCancel }
 
                   <div className="log-config-rate-display">
                     {formatRateMs(entry.rateMs)}
+                    {!rateAllowed(entry.rateMs) && (
+                      <span className="log-config-rate-warning"> · too fast for low power (at most 1 Hz)</span>
+                    )}
                     {entry.pollIntervalMs > 0 && entry.rateMs === 0 && (
                       <span className="log-config-poll-rate"> · poll: {(1000 / entry.pollIntervalMs).toFixed(1)} Hz</span>
                     )}

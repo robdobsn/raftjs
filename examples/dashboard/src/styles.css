@@ -1672,6 +1672,22 @@ h1 {
     border-top: 1px solid #444;
 }
 
+.log-config-lowpower-section {
+    margin-top: 10px;
+    padding-top: 8px;
+    border-top: 1px solid #444;
+}
+
+.log-config-lowpower-note {
+    margin-top: 4px;
+    font-size: 0.85em;
+    color: #bbb;
+}
+
+.log-config-rate-warning {
+    color: #fda;
+}
+
 /* Image Files Panel */
 .image-files-breadcrumb {
     font-size: 0.85em;
