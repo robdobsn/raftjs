@@ -11,6 +11,10 @@
 //   posMax       position at the far end of the strip (default the attribute range)
 //   sizeMax      size drawn as the largest mark (default the largest size seen)
 //   numChannels  sensing channels, drawn as ticks along the strip (default none)
+//   chanAttr     (optional) name of an array attribute holding a value per channel (e.g. a capacitive controller's
+//                difference counts), drawn as a bar at each channel tick - only the first numChannels elements
+//   chanMax      channel value drawn as a full-height bar (default 255)
+//   chanReverse  true if element 0 of chanAttr is the channel at the far end of the strip (posMax) rather than at 0
 //
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -27,6 +31,9 @@ interface TouchStripOptions {
     posMax?: number;
     sizeMax?: number;
     numChannels?: number;
+    chanAttr?: string;
+    chanMax?: number;
+    chanReverse?: boolean;
 }
 
 // Latest complete sample of an attribute (all its elements)
@@ -75,6 +82,23 @@ const TouchStripVisualizer: React.FC<DeviceVisualizerProps> = memo(({ deviceKey,
         ticks.push(<line key={c} x1={x} x2={x} y1={STRIP_Y + STRIP_H - 6} y2={STRIP_Y + STRIP_H} stroke="#888" strokeWidth={2} />);
     }
 
+    // Per-channel values (e.g. difference counts) as bars rising from the bottom of the strip at each channel tick
+    const bars: JSX.Element[] = [];
+    if (opts.chanAttr && numChannels > 0) {
+        const chanVals = latestSample(deviceState.deviceAttributes[opts.chanAttr]).slice(0, numChannels);
+        const chanMax = Math.max(1, opts.chanMax ?? 255);
+        const barW = Math.max(4, (VIEW_W / numChannels) * 0.6);
+        for (let c = 0; c < chanVals.length; c++) {
+            const v = chanVals[opts.chanReverse ? chanVals.length - 1 - c : c];
+            if (!Number.isFinite(v) || v <= 0) continue;
+            const frac = Math.min(1, v / chanMax);
+            const x = numChannels > 1 ? (c / (numChannels - 1)) * VIEW_W : VIEW_W / 2;
+            const h = frac * (STRIP_H - 4);
+            bars.push(<rect key={c} x={Math.min(VIEW_W - barW, Math.max(0, x - barW / 2))} y={STRIP_Y + STRIP_H - 2 - h}
+                            width={barW} height={h} fill="#9ccc65" fillOpacity={0.35 + 0.5 * frac} />);
+        }
+    }
+
     return (
         <div className="device-touchstrip">
             <div className="zonegrid-header">
@@ -84,6 +108,7 @@ const TouchStripVisualizer: React.FC<DeviceVisualizerProps> = memo(({ deviceKey,
             </div>
             <svg className="touchstrip-svg" viewBox={`0 0 ${VIEW_W} ${VIEW_H}`} preserveAspectRatio="none">
                 <rect x={0} y={STRIP_Y} width={VIEW_W} height={STRIP_H} rx={8} fill="#3a3f4b" stroke="#666" />
+                {bars}
                 {ticks}
                 {touches.map(t => {
                     const x = Math.min(1, Math.max(0, t.pos / posMax)) * VIEW_W;
