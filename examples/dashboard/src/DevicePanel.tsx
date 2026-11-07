@@ -9,6 +9,7 @@ import ConnManager from './ConnManager';
 import SettingsManager from './SettingsManager';
 import { VisualizerRegistry } from './visualizers';
 import { computeTimelineChartGroups } from './chartGrouping';
+import { getLeftWidthPx, setLeftWidthPx, subscribeLeftWidth, defaultLeftWidthPx, clampLeftWidthPx } from './panelSplit';
 
 const connManager = ConnManager.getInstance();
 
@@ -32,10 +33,37 @@ const DevicePanel = ({ deviceKey, lastUpdated }: DevicePanelProps) => {
     const [showStats, setShowStats] = useState<boolean>(false);
     const menuRef = useRef<HTMLDivElement>(null);
 
+    // Left column width (shared by all device panels - see panelSplit), so the charts don't move as values change
+    const blockDataRef = useRef<HTMLDivElement>(null);
+    const [leftWidthPx, setLeftWidthState] = useState<number | null>(getLeftWidthPx());
+    const splitDragRef = useRef<{ startX: number; startWidthPx: number } | null>(null);
+    useEffect(() => subscribeLeftWidth(setLeftWidthState), []);
+
     const settingsManager = SettingsManager.getInstance();
     const [showCharts, setShowCharts] = useState(
        settingsManager.getSetting('showCharts')
     );
+
+    // First panel shown with charts sets the width: a third of the panel
+    useEffect(() => {
+        if (showCharts && (getLeftWidthPx() === null) && blockDataRef.current) {
+            setLeftWidthPx(defaultLeftWidthPx(blockDataRef.current.clientWidth));
+        }
+    }, [showCharts]);
+    const panelWidthPx = () => blockDataRef.current?.clientWidth ?? window.innerWidth;
+    const handleSplitPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+        e.preventDefault();
+        e.currentTarget.setPointerCapture(e.pointerId);
+        splitDragRef.current = { startX: e.clientX, startWidthPx: leftWidthPx ?? defaultLeftWidthPx(panelWidthPx()) };
+    };
+    const handleSplitPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+        const drag = splitDragRef.current;
+        if (!drag) return;
+        setLeftWidthPx(clampLeftWidthPx(drag.startWidthPx + e.clientX - drag.startX, panelWidthPx()));
+    };
+    const handleSplitPointerUp = () => {
+        splitDragRef.current = null;
+    };
 
     // Combine the timeline charts into one, rather than splitting them by units - remembered per device type
     const chartTypeKey = deviceState?.deviceTypeInfo?.type ?? deviceState?.deviceTypeInfo?.name ?? deviceKey;
@@ -277,11 +305,23 @@ const DevicePanel = ({ deviceKey, lastUpdated }: DevicePanelProps) => {
                     </div>
                 </div>
             )}
-            <div className={`device-block-data`}>
-                <div className="device-attrs-and-actions">
+            <div className={`device-block-data`} ref={blockDataRef}>
+                <div className="device-attrs-and-actions"
+                     style={(showCharts && leftWidthPx !== null)
+                        ? { flex: `0 0 ${Math.min(leftWidthPx, Math.max(0, panelWidthPx() - 60))}px`, minWidth: 0 }
+                        : undefined}>
                     <DeviceAttrsForm deviceKey={deviceKey} lastUpdated={lastUpdated} />
                     <DeviceActionsForm deviceKey={deviceKey} />
                 </div>
+                {showCharts && (
+                    <div className="device-panel-splitter"
+                         title="Drag to change the width (double-click: back to a third)"
+                         onPointerDown={handleSplitPointerDown}
+                         onPointerMove={handleSplitPointerMove}
+                         onPointerUp={handleSplitPointerUp}
+                         onPointerCancel={handleSplitPointerUp}
+                         onDoubleClick={() => setLeftWidthPx(defaultLeftWidthPx(panelWidthPx()))} />
+                )}
                 {showStats && (
                     <DeviceStatsPanel deviceKey={deviceKey} lastUpdated={timedChartUpdate} />
                 )}
