@@ -252,6 +252,7 @@ export interface DeviceTypeAction {
     map?: Record<string, ActionMapValue>; // Discrete value mapping (display value -> hex string or {w, i, s} object)
     desc?: string;                  // Human-readable description
     vt?: string;                    // Visual type - names a specialized visualizer (e.g. 'ledgrid')
+    vo?: Record<string, unknown>;   // Visualizer options (as an attribute's vo) - meaning depends on vt
 }
 
 export interface DeviceTypeInfo {

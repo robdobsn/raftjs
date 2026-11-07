@@ -14,6 +14,7 @@ import ZoneGridVisualizer from './ZoneGridVisualizer';
 import StackLightVisualizer from './StackLightVisualizer';
 import DistanceStripVisualizer from './DistanceStripVisualizer';
 import TouchStripVisualizer from './TouchStripVisualizer';
+import KeyboardVisualizer from './KeyboardVisualizer';
 import HeartRateVisualizer from './HeartRateVisualizer';
 import ColourVisualizer from './ColourVisualizer';
 import LightSpectrumVisualizer from './LightSpectrumVisualizer';
@@ -114,6 +115,17 @@ VisualizerRegistry.register({
         return 0;
     },
     component: TouchStripVisualizer,
+});
+
+VisualizerRegistry.register({
+    id: 'keyboard',
+    placement: 'charts',
+    match: (item) => {
+        if (item.kind !== 'action') return 0;
+        if (item.action.vt === 'keyboard') return 100;
+        return 0;
+    },
+    component: KeyboardVisualizer,
 });
 
 VisualizerRegistry.register({
