@@ -9,6 +9,7 @@
 
 import { DeviceTypeAction, SampleRateResult } from "./RaftDeviceInfo";
 import { DeviceAttributeState, DevicesState, DeviceState, DeviceStats } from "./RaftDeviceStates";
+import type { DeviceDecodedData } from "./RaftDeviceManager";
 
 export default interface RaftDeviceMgrIF {
 
@@ -32,6 +33,10 @@ export default interface RaftDeviceMgrIF {
     removeNewAttributeCallback(callback: (deviceKey: string, attrState: DeviceAttributeState) => void): void;
     addAttributeDataCallback(callback: (deviceKey: string, attrState: DeviceAttributeState) => void): void;
     removeAttributeDataCallback(callback: (deviceKey: string, attrState: DeviceAttributeState) => void): void;
+    // Decoded data: one call per message with every attribute's new values and their timestamps (optional - not
+    // every implementation provides it)
+    addDecodedDataCallback?(callback: (decoded: DeviceDecodedData) => void): void;
+    removeDecodedDataCallback?(callback: (decoded: DeviceDecodedData) => void): void;
     addDeviceRemovedCallback(callback: (deviceKey: string, state: DeviceState) => void): void;
     removeDeviceRemovedCallback(callback: (deviceKey: string, state: DeviceState) => void): void;
 

@@ -18,6 +18,9 @@
 //
 // Values sent are MIDI note numbers (the action's t, normally "B").
 //
+// When a control such as a touch strip is connected, a "Play with" row (controls/PlayWithRow) lets it play the synth
+// (keys or stylophone - controls/synthModes); its notes light the keys like any others.
+//
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
@@ -25,6 +28,8 @@ import ConnManager from '../ConnManager';
 import { DeviceState, DeviceAttributeState } from '../../../../src/RaftDeviceStates';
 import { DeviceTypeAction } from '../../../../src/RaftDeviceInfo';
 import { DeviceVisualizerProps } from './VisualizerRegistry';
+import PlayWithRow from '../controls/PlayWithRow';
+import '../controls/synthModes';
 
 const connManager = ConnManager.getInstance();
 
@@ -219,6 +224,7 @@ const KeyboardVisualizer: React.FC<DeviceVisualizerProps> = ({ deviceKey, action
                     )}
                 </span>
             </div>
+            <PlayWithRow targetKey={deviceKey} />
             <svg ref={svgRef} className="keyboard-svg" viewBox={`0 0 ${width} ${WHITE_H}`} preserveAspectRatio="none"
                  onPointerDown={onPointerDown} onPointerMove={onPointerMove}
                  onPointerUp={onPointerEnd} onPointerCancel={onPointerEnd}>

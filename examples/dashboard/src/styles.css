@@ -645,6 +645,33 @@ h1 {
     text-align: center;
 }
 
+.playwith-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 14px;
+    margin-top: 6px;
+    font-size: 0.9rem;
+}
+
+.playwith-row select,
+.playwith-row input {
+    font-size: 0.9rem;
+}
+
+.playwith-number {
+    width: 3.5rem;
+}
+
+.playwith-note {
+    margin-left: 4px;
+    color: #9cf;
+}
+
+.playwith-waiting {
+    color: #ffb74d;
+}
+
 .keyboard-svg {
     display: block;
     width: min(100%, 48rem);
