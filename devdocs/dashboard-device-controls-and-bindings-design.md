@@ -2,7 +2,7 @@
 
 Date: 2026-11-07.
 
-**Status:** phases 1-2 implemented and tested on the CogPro (2026-11-08); phases 3-7 to do.
+**Status:** phases 1-3 implemented and tested on the CogPro (2026-11-08); phases 4-7 to do.
 
 **Motivation:** play the CogPro synth from a touch sensor:
 - a Trill Flex style strip (the CogPro's CY8CMBR3116, record `CogProMBR3`) as a keyboard or stylophone;
@@ -178,7 +178,7 @@ Touch → poll (CogProMBR3 50 ms, Trill ~50 ms) → publish → transport → br
 |-|-|-|
 | 1 ✅ | `ControlDirectory` with adapters (touchstrip→`pos1d`: touch ids, start/move/end), `useControls` hooks | CogProMBR3 shows as a `pos1d` source (Trill Flex: same adapter, not yet on hardware) |
 | 2 ✅ | `BindingManager` (queues, pause/resume) + Keys and Stylophone modes; Play-with row in `KeyboardVisualizer` | The strip plays the synth from the dashboard in both modes |
-| 3 | Synth `bend`/`vibrato` actions; Bend and Expression modes | Bend works from the strip (relative) |
+| 3 ✅ | Synth `bend`/`vibrato` actions; Bend and Expression modes | Bend works from the strip (relative) |
 | 4 | `ctl` in the record format (RaftCore wiki, generator, raftjs types); `pos2d` adapter; TrillSquare/Hex records gain `ctl`; XY mode | Trill Square XY drives pitch and volume |
 | 5 | NeoSlider record (seesaw, I2C 0x30-0x33: pot ADC and 4 NeoPixels as an action) with `ctl` scalar; `scalar` adapter | Slider bends notes; its LEDs show the bend |
 | 6 | Persistence (offer on reappear); sink-based generic modes (§2.3) | Bindings come back after reconnect; a non-synth sink works |
@@ -214,4 +214,20 @@ Touch → poll (CogProMBR3 50 ms, Trill ~50 ms) → publish → transport → br
 - **Keys mode** sends note-off before note-on when a touch moves to a new key, so the synth never holds both.
 - **Stylophone** follows the first touch only (the synth's `glide` moves its newest voice). See §8 for multi-touch.
 - **Bindings aren't saved yet** (phase 6). They last for the page session.
+
+## 10. Implementation notes (phase 3, 2026-11-08)
+
+- **Bend:** sliding from where the touch started bends by up to ±`range` cents across half the control.
+  - With **Play a note** (the default), the touch plays the note under it, using the Keys/Stylophone mapping, and
+    the slide bends that note.
+  - Without it, it bends notes held elsewhere (e.g. on the keyboard), and lifting returns to pitch.
+  - When it plays its own note, the bend is reset at the next touch, not on release, so the note's release tail
+    doesn't jump in pitch.
+- **Expression:** the position sets `volume` or `vibrato` and stays when released, like a fader. The synth engine now
+  slews its master volume (full scale in ~30 ms), so volume steps from a pad-resolution strip don't click.
+- **Touch tracking:** one touch before and after a sample is always the same touch, however far it moved. That
+  covers fast swipes and single-touch devices; nearest-match within `TOUCH_MATCH_MAX` applies only with several
+  touches.
+- **A bug found on the way:** bend did nothing on the board, because `Raft::clamp` is `uint32_t` only. It is now
+  deprecated in RaftCore (#47) and replaced with `std::clamp`.
 
