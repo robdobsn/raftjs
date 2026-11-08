@@ -56,6 +56,7 @@ export interface LogConfig {
   format: string;       // "csv" or "jsonl"
   csvHeader?: boolean;  // include metadata comment block in CSV
   durationMs: number;   // logging duration in ms (0 = unlimited)
+  lowPower?: boolean;   // low-power logging: radios off, light sleep between samples (at most 1 Hz per device)
   devices: Array<{
     bus: string;
     addr: string;
@@ -101,6 +102,22 @@ export default function LogConfigPanel({ onConfigChanged, disabled, cameraAvaila
   const [camFs, setCamFs] = useState('sd');
   const [camSize, setCamSize] = useState('');
   const [camQuality, setCamQuality] = useState('');
+  const [lowPower, setLowPower] = useState(false);
+  const [lowPowerAvail, setLowPowerAvail] = useState(false);
+
+  // Whether the device can run a low-power session now (firmware support, a battery, not busy)
+  const fetchLowPowerAvail = async () => {
+    if (!connManager.getConnector().isConnected()) return;
+    try {
+      const resp = await connManager.getConnector().sendRICRESTMsg('datalog?action=status', {});
+      const r = resp as any;
+      const avail = r?.lowPowerAvail === true;
+      setLowPowerAvail(avail);
+      if (!avail) setLowPower(false);
+    } catch (e) {
+      // ignore
+    }
+  };
 
   // Fetch filesystem info from device
   const fetchFsInfo = async () => {
@@ -221,6 +238,7 @@ export default function LogConfigPanel({ onConfigChanged, disabled, cameraAvaila
   useEffect(() => {
     refreshDeviceList();
     fetchFsInfo();
+    fetchLowPowerAvail();
   }, [lastUpdated]);
 
   // Notify parent of config changes
@@ -235,6 +253,7 @@ export default function LogConfigPanel({ onConfigChanged, disabled, cameraAvaila
       format,
       csvHeader: format === 'csv' ? csvHeader : undefined,
       durationMs,
+      lowPower: lowPower || undefined,
       devices: enabledDevices.map(d => {
         const entry: LogConfig['devices'][0] = {
           bus: d.busName,
@@ -257,7 +276,11 @@ export default function LogConfigPanel({ onConfigChanged, disabled, cameraAvaila
       };
     }
     onConfigChanged?.(config);
-  }, [deviceEntries, format, csvHeader, durationMs, cameraAvailable, camEnabled, camIntervalMs, camFs, camSize, camQuality]);
+  }, [deviceEntries, format, csvHeader, durationMs, lowPower, cameraAvailable, camEnabled, camIntervalMs, camFs, camSize, camQuality]);
+
+  // In a low-power session every device is logged at most once a second (the device refuses faster ones)
+  const LOW_POWER_MIN_RATE_MS = 1000;
+  const tooFastForLowPower = deviceEntries.filter(d => d.enabled && d.rateMs < LOW_POWER_MIN_RATE_MS);
 
   const [showDeviceDialog, setShowDeviceDialog] = useState(false);
 
@@ -368,6 +391,32 @@ export default function LogConfigPanel({ onConfigChanged, disabled, cameraAvaila
         </div>
       )}
 
+      {lowPowerAvail && (
+        <div className="log-config-lowpower-section">
+          <label className="log-config-csv-header-label">
+            <input
+              type="checkbox"
+              checked={lowPower}
+              onChange={e => setLowPower(e.target.checked)}
+              disabled={disabled}
+            />
+            Low power (battery)
+          </label>
+          {lowPower && (
+            <div className="log-config-lowpower-note">
+              For long sessions on battery: about 30 s after starting, the device turns WiFi and BLE off and logs on
+              its own (each device at most once a second); the status LED flashes every few seconds. Tap the power
+              button to stop - the device restarts - then reconnect to download the file.
+              {tooFastForLowPower.length > 0 && (
+                <div className="log-config-rate-warning">
+                  Set these to once a second or slower: {tooFastForLowPower.map(d => `${d.typeName} (0x${d.addr})`).join(', ')}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="log-config-devices-summary">
         <div className="log-config-summary-header">
           <span className="log-config-rate-label">Devices:</span>
@@ -456,6 +505,7 @@ export default function LogConfigPanel({ onConfigChanged, disabled, cameraAvaila
         <DeviceSelectDialog
           entries={deviceEntries}
           format={format}
+          minRateMs={lowPower ? LOW_POWER_MIN_RATE_MS : undefined}
           onSave={handleDeviceSave}
           onCancel={() => setShowDeviceDialog(false)}
         />

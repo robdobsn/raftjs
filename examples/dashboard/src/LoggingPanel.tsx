@@ -24,6 +24,7 @@ interface LogStatus {
   avgWriteMs: number;
   maxWriteMs: number;
   bytesPerSec: number;
+  lowPower: boolean;      // a low-power session (the device turns its radios off once it has started)
 }
 
 // The data rate a session with the current config would give (datalog?action=estimate), and the device's limit
@@ -53,6 +54,7 @@ const emptyStatus: LogStatus = {
   samples: 0,
   flushCount: 0,
   bufferOverflows: 0,
+  lowPower: false,
   avgWriteMs: 0,
   maxWriteMs: 0,
   bytesPerSec: 0,
@@ -67,6 +69,7 @@ interface LoggingPanelProps {
 
 export default function LoggingPanel({ onLogStopped, pausePolling, logConfig, cameraAvailable }: LoggingPanelProps) {
   const [status, setStatus] = useState<LogStatus>(emptyStatus);
+  const [connected, setConnected] = useState(true);
   const [cameraStatus, setCameraStatus] = useState<CameraCaptureStatus | null>(null);
   const [label, setLabel] = useState('');
   const [isBusy, setIsBusy] = useState(false);
@@ -115,7 +118,11 @@ export default function LoggingPanel({ onLogStopped, pausePolling, logConfig, ca
   };
 
   const fetchStatus = async () => {
-    if (!connManager.getConnector().isConnected()) return;
+    if (!connManager.getConnector().isConnected()) {
+      setConnected(false);
+      return;
+    }
+    setConnected(true);
     try {
       const resp = await connManager.getConnector().sendRICRESTMsg(
         'datalog?action=status', {}
@@ -135,6 +142,7 @@ export default function LoggingPanel({ onLogStopped, pausePolling, logConfig, ca
           avgWriteMs: (flushLatency.avgUs ?? 0) / 1000,
           maxWriteMs: (flushLatency.maxUs ?? 0) / 1000,
           bytesPerSec: r.bytesPerSec ?? 0,
+          lowPower: r.lowPower === true,
         });
         // Detect timed logging session that finished on its own
         if (wasLoggingRef.current && !nowLogging) {
@@ -328,8 +336,16 @@ export default function LoggingPanel({ onLogStopped, pausePolling, logConfig, ca
         <>
           <div className="logging-status-active">
             <div className="logging-indicator" />
-            <span>Logging Active</span>
+            <span>{status.lowPower ? (connected ? 'Logging Active (low power)' : 'Logging in low power (disconnected)') : 'Logging Active'}</span>
           </div>
+          {status.lowPower && (
+            <div className="logging-warning">
+              {connected
+                ? 'WiFi and BLE turn off about 30 s after the start, and the device logs on its own. '
+                : 'The device has turned WiFi and BLE off and is logging on its own (the status LED flashes every few seconds). '}
+              To stop, tap the device's power button (it restarts), then reconnect to download the file.
+            </div>
+          )}
           <div className="info">
             <div className="info-line">
               <div className="info-label">File:</div>
