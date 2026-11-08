@@ -210,6 +210,32 @@ describe("custom decode with signed array attribute", () => {
         expect(devAttrsState["f"].values).toEqual([-1, 2]);
         expect(devAttrsState["f"].elemsPerSample).toBe(2);
     });
+
+    // CaliPile (RaftCore devtypes/records/CaliPile.json): the code negates a magnitude from a sign flag
+    test("leaves a value the code already made negative", () => {
+        const meta: DeviceTypePollRespMetadata = {
+            b: 2,
+            a: [{ n: "v", t: "<h", r: [-255, 255], f: "d", o: "int16" }],
+            c: { n: "neg", c: "int p=buf[0];if(buf[1]&128){p=-p;}out.v=p;" }
+        } as DeviceTypePollRespMetadata;
+        const handler = new AttributeHandler();
+        const devAttrsState: DeviceAttributesState = {};
+        handler.processMsgAttrGroup(new Uint8Array([0x00, 0x10, 17, 0x80]), 0, newTimeline(), meta, devAttrsState, 100);
+        expect(devAttrsState["v"].values).toEqual([-17]);
+    });
+
+    test("sign-extends 32-bit values", () => {
+        const meta: DeviceTypePollRespMetadata = {
+            b: 8,
+            a: [{ n: "v", t: "<i[2]", r: [-2147483648, 2147483647], f: "d", o: "int32" }],
+            c: { n: "s32", c: "out.v[0]=buf[0]*16777216+buf[1]*65536+buf[2]*256+buf[3];out.v[1]=buf[4]*16777216+buf[5]*65536+buf[6]*256+buf[7];" }
+        } as DeviceTypePollRespMetadata;
+        const handler = new AttributeHandler();
+        const devAttrsState: DeviceAttributesState = {};
+        const msg = new Uint8Array([0x00, 0x10, 0xFF, 0xFF, 0xFF, 0xFE, 0x00, 0x00, 0x01, 0x00]);
+        handler.processMsgAttrGroup(msg, 0, newTimeline(), meta, devAttrsState, 100);
+        expect(devAttrsState["v"].values).toEqual([-2, 256]);
+    });
 });
 
 // SCD30 (RaftCore devtypes/records/SCD30.json resp): a sample only when the second data-ready word is 1, with the
