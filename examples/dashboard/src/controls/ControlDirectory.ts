@@ -101,8 +101,11 @@ export class TouchStripSource extends ControlSourceBase {
         prev.forEach((t, p) => positions.forEach((np, n) => pairs.push({ p, n, d: Math.abs(t.pos - np.pos) })));
         pairs.sort((a, b) => a.d - b.d);
         const matchedNew = new Map<number, number>();     // new index -> prev index
+        // One touch before and after is the same touch however far it moved (a fast swipe, or a single-touch device);
+        // with more, the nearest pairs within TOUCH_MATCH_MAX are the same touches
+        const singleTouch = (prev.length === 1) && (positions.length === 1);
         for (const pr of pairs) {
-            if (pr.d > TOUCH_MATCH_MAX) break;
+            if (!singleTouch && pr.d > TOUCH_MATCH_MAX) break;
             if (!unmatchedPrev.has(pr.p) || matchedNew.has(pr.n)) continue;
             matchedNew.set(pr.n, pr.p);
             unmatchedPrev.delete(pr.p);
