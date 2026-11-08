@@ -82,15 +82,18 @@ export default class AttributeHandler {
                 if (newAttrValues[attrIdx].length === 0) continue;
 
                 // Sign-extend values for signed types — the pseudocode produces unsigned
-                // values from bitwise operations, but the attribute type declares signedness
+                // values from bitwise operations, but the attribute type declares signedness.
+                // Only values in the upper half of the unsigned range are extended: a value the
+                // code already made negative (e.g. pres=-pres) is left as it is. Arithmetic rather
+                // than bitwise, as JS bitwise operators are 32-bit signed (1 << 31 is negative)
                 if (attrDef.t && isAttrTypeSigned(attrDef.t)) {
                     // Width of one element (array attributes like "<h[64]" are sign-extended per element)
                     const byteWidth = structSizeOf(attrDef.t) / getAttrElemsPerSample(attrDef.t);
-                    const signBit = 1 << (byteWidth * 8 - 1);
-                    const range = signBit * 2;
+                    const half = 2 ** (byteWidth * 8 - 1);
+                    const range = half * 2;
                     newAttrValues[attrIdx] = newAttrValues[attrIdx].map(v => {
                         const n = v as number;
-                        return (n & signBit) ? n - range : n;
+                        return (n >= half && n < range) ? n - range : n;
                     });
                 }
 
