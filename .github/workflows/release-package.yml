@@ -24,7 +24,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ github.event.inputs.branch || 'main' }}
+          ref: ${{ github.event.inputs.branch || github.event.release.tag_name || 'main' }}
 
       - name: Setup Node.js for npm
         uses: actions/setup-node@v5
