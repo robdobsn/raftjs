@@ -38,11 +38,13 @@ export default class RaftMicroPythonConsoleClient {
     return this._connector.sendRICRESTMsg("upy/repl/output", { since }) as Promise<RaftMicroPythonConsoleOutput>;
   }
 
+  // The text is URL-encoded (sendRICRESTMsg encodes params) so spaces, &, ?, quotes etc. reach the REPL intact.
+  // The newline is added by the firmware (newline=1) rather than sent as a trailing \r because firmware before
+  // the RaftMicroPy raw-query fix trims whitespace from query values, which removed the \r.
   async input(data: string, newline = true): Promise<{ rslt?: string }> {
-    const payload = newline ? `${data}${REPL_NEWLINE}` : data;
     return this._connector.sendRICRESTMsg(
-      `upy/repl/input?data=${payload}&newline=0`,
-      {}
+      "upy/repl/input",
+      { data, newline: newline ? 1 : 0 }
     ) as Promise<{ rslt?: string }>;
   }
 
