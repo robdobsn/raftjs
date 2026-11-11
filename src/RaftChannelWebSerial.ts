@@ -321,7 +321,8 @@ export default class RaftChannelWebSerial implements RaftChannel {
 
     // any output over the non overascii channel will be delimited by a new line character
     // scan for this, and log any lines as they occur before removing them from the buffer
-    if (this._serialBuffer.includes(0x0a)) {
+    // (every complete line - a chunk can hold several)
+    while (this._serialBuffer.includes(0x0a)) {
       const decoder = new TextDecoder();
       RaftLog.debug(decoder.decode(new Uint8Array(this._serialBuffer.slice(0, this._serialBuffer.indexOf(0x0a)))));
       this._serialBuffer.splice(0, this._serialBuffer.indexOf(0x0a) + 1);

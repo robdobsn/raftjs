@@ -297,7 +297,10 @@ export default class RaftMiniHDLC {
   
   addRxByte(rxByte: number): void {
     if (rxByte === this.FRAME_BOUNDARY_OCTET) {
-      if (this.rxBuffer.length > 2) {
+      // As the firmware (MiniHDLC): 2 or more bytes are a frame if the last 2 are the CRC of the others (so a
+      // frame can be empty), and an escape doesn't carry over a flag
+      this.rxState = RaftMiniHDLCState.STATE_READ;
+      if (this.rxBuffer.length >= 2) {
         this.frameCRC = this.rxBuffer.slice(-2);
         this.rxBuffer = this.rxBuffer.slice(0, -2);
         if (this._checkCRC()) {
@@ -352,7 +355,8 @@ export default class RaftMiniHDLC {
   }
 
   encode(content: Uint8Array): Uint8Array {
-    const maxBufferLen = content.length * 2 + 4;
+    // Every byte (payload and both CRC bytes) may be escaped, plus the two flags
+    const maxBufferLen = content.length * 2 + 6;
     const frameData = new Uint8Array(maxBufferLen);
     let framePos = 0;
 
