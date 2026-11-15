@@ -48,6 +48,13 @@ class FileBlockTrackInfo {
   }
 }
 
+// No data arrived for FILE_RX_STALL_MS and smaller blocks can be tried
+class FileRxStalledError extends Error {
+  constructor() {
+    super('fileReceive stalled');
+  }
+}
+
 export default class RaftFileHandler {
   private _msgHandler: RaftMsgHandler;
 
@@ -78,8 +85,18 @@ export default class RaftFileHandler {
   private _fileRxBuffer = new Uint8Array(0);
   private _fileRxLastAckTime = 0;
   private _fileRxLastBlockTime = 0;
-  private _fileRxLastAckPos = 0;
   private FILE_RX_ACK_RESEND_TIMEOUT_MS = 1000;
+  private _fileRxBlocksSinceAck = 0;
+  private _fileRxBridgeID: number | undefined = undefined;
+
+  // Download block size to ask for (the device may lower it). A download that gets no data for
+  // FILE_RX_STALL_MS starts again with blocks of half the size (down to FILE_RX_BLOCK_SIZE_MIN), and the size that
+  // worked is then asked for first: firmware with RaftCore 1.67.0 or earlier can offer blocks its transport can't send (the
+  // USB serial console drops a frame over 4096 bytes once encoded) and never sends smaller ones. Later firmware
+  // halves the block size itself after 3s, which is why the wait here is longer
+  private _fileRxBlockSizeToRequest = 5000;
+  FILE_RX_STALL_MS = 6000;
+  FILE_RX_BLOCK_SIZE_MIN = 300;
 
   // RaftCommsStats
   private _commsStats: RaftCommsStats;
@@ -465,12 +482,30 @@ export default class RaftFileHandler {
       RaftLog.info(`fileReceive - bridge setup ${bridgeID}`);
     }
 
-    // Send file start message
-    if (!await this._receiveFileStart(fileName, bridgeID))
-      return new RaftFileDownloadResult();
+    // Start, and receive the contents - again with smaller blocks if no data arrives (see FILE_RX_STALL_MS)
+    let blockSize = this._fileRxBlockSizeToRequest;
+    let fellBack = false;
+    let fileContents: RaftFileDownloadResult;
+    for (;;) {
+      if (!await this._receiveFileStart(fileName, bridgeID, blockSize))
+        return new RaftFileDownloadResult();
 
-    // Send contents
-    const fileContents = await this._receiveFileContents(progressCallback, bridgeID);
+      // Smaller blocks are worth trying if the device is using the size asked for (or more)
+      const canShrink = (this._fileRxBatchMsgSize >= blockSize) &&
+                  (Math.floor(blockSize / 2) >= this.FILE_RX_BLOCK_SIZE_MIN);
+      try {
+        fileContents = await this._receiveFileContents(progressCallback, bridgeID, canShrink);
+        break;
+      } catch (err) {
+        if (!(err instanceof FileRxStalledError))
+          throw err;
+        blockSize = Math.floor(blockSize / 2);
+        fellBack = true;
+        RaftLog.warn(`fileReceive - no data from the device, trying ${blockSize}-byte blocks`);
+      }
+    }
+    if (fellBack)
+      this._fileRxBlockSizeToRequest = blockSize;
 
     // Send file end (and verify deferred CRC if applicable)
     if (!await this._receiveFileEnd(fileName, bridgeID))
@@ -487,9 +522,9 @@ export default class RaftFileHandler {
     this._isRxCancelled = true;
   }
 
-  async _receiveFileStart(fileName: string, bridgeID: number | undefined) : Promise<boolean> {
+  async _receiveFileStart(fileName: string, bridgeID: number | undefined,
+              blockMaxSizeRequested = this._fileRxBlockSizeToRequest) : Promise<boolean> {
 
-    const blockMaxSizeRequested = 5000;
     const batchAckSizeRequested = 4;
     const fileSrc = "fs";
 
@@ -523,8 +558,12 @@ export default class RaftFileHandler {
       // CRC may be provided at start (old firmware) or deferred to dfEnd (new firmware)
       this._fileRxCrc16 = cmdResp.crc16 ? parseInt(cmdResp.crc16, 16) : -1;
       this._fileRxBuffer = new Uint8Array(0);
+      // An ack time of 0 makes _receiveFileContents ack (okto 0) as soon as it starts. The device sends its first
+      // block when that ack arrives: a block sent straight after the reply to dfStart could arrive before this
+      // handler was ready for it (_fileRxActive below), and be ignored
       this._fileRxLastAckTime = 0;
-      this._fileRxLastAckPos = 0;
+      this._fileRxBlocksSinceAck = 0;
+      this._fileRxBridgeID = bridgeID;
       this._fileRxLastBlockTime = Date.now();
       this._fileRxActive = true;
     }
@@ -537,29 +576,27 @@ export default class RaftFileHandler {
 
   async _receiveFileContents(
         progressCallback: RaftProgressCBType | undefined,
-        bridgeID: number | undefined
+        bridgeID: number | undefined,
+        canShrink = false
   ): Promise<RaftFileDownloadResult> {
 
-    // Calculate dynamic timeouts based on file size and connection speed
-    // Use batch message size as proxy for connection type:
-    //   BLE ~500 byte blocks ~5 KB/s, WebSocket ~5000 byte blocks ~50 KB/s
-    const estimatedBytesPerSec = this._fileRxBatchMsgSize <= 500 ? 5000 : 50000;
-    const BASE_TIMEOUT_MS = 30000;
-    const SAFETY_FACTOR = 2;
-    const transferTimeMs = (this._fileRxFileLen / estimatedBytesPerSec) * 1000 * SAFETY_FACTOR;
-    const overallTimeoutMs = BASE_TIMEOUT_MS + transferTimeMs;
+    // The transfer fails if no data arrives for this long (however long the file takes, as long as data keeps
+    // arriving: its speed depends on the link and the firmware)
     const blockTimeoutMs = this.BLOCK_ACK_TIMEOUT_MS;
     RaftLog.info(`_receiveFileContents - fileLen ${this._fileRxFileLen} batchMsgSize ${this._fileRxBatchMsgSize} ` +
-        `estimatedBytesPerSec ${estimatedBytesPerSec} overallTimeoutMs ${overallTimeoutMs} blockTimeoutMs ${blockTimeoutMs}`);
+        `blockTimeoutMs ${blockTimeoutMs}`);
 
     // Wait for file to be received
     return new Promise<RaftFileDownloadResult>((resolve, reject) => {
-      const startTime = Date.now();
       const checkForComplete = async () => {
 
         // Check if we've received the whole file
         if (this._fileRxFileLen === this._fileRxBuffer.length) {
           this._fileRxActive = false;
+
+          // The final ack (the device waits for dfEnd for 2s after the last data is acked)
+          this._sendFileRxAck();
+
           // Progress callback
           if (progressCallback) {
             progressCallback(this._fileRxBuffer.length, this._fileRxFileLen);
@@ -592,53 +629,28 @@ export default class RaftFileHandler {
           return;
         }
 
-        // Check for timeouts
+        // Check for no data arriving
         const now = Date.now();
-
-        // Check for overall timeouts
-        if ((now - startTime > overallTimeoutMs) ||
-            (now - this._fileRxLastBlockTime > blockTimeoutMs)) {
+        const sinceLastBlockMs = now - this._fileRxLastBlockTime;
+        if (canShrink && (sinceLastBlockMs > this.FILE_RX_STALL_MS)) {
+          // Smaller blocks may get through (see FILE_RX_STALL_MS)
+          this._fileRxActive = false;
+          this._sendFileRxCancelMsg(bridgeID);
+          reject(new FileRxStalledError());
+          return;
+        }
+        if (sinceLastBlockMs > blockTimeoutMs) {
           RaftLog.warn(`_receiveFileContents - time-out no new data received ` +
-              `elapsed ${now - startTime}ms overallTimeout ${overallTimeoutMs}ms ` +
-              `blockGap ${now - this._fileRxLastBlockTime}ms blockTimeout ${blockTimeoutMs}ms`);
+              `blockGap ${sinceLastBlockMs}ms blockTimeout ${blockTimeoutMs}ms`);
           this._fileRxActive = false;
           this._sendFileRxCancelMsg(bridgeID);
           reject(new Error('fileReceive failed'));
           return;
         }
 
-        // Check if time to send ack
-        let ackRequired = false;
-        if (Date.now() - this._fileRxLastAckTime > this.FILE_RX_ACK_RESEND_TIMEOUT_MS) {
-          ackRequired = true;
-        }
-
-        // Check if position to send ack
-        if (this._fileRxBuffer.length - this._fileRxLastAckPos >= this._fileRxBatchAckSize * this._fileRxBatchMsgSize) {
-          ackRequired = true;
-        }
-        // RaftLog.info(`_receiveFileContents ${ackRequired ? "ACK_REQUIRED" : "ACK_NOTREQUIRED"}  ${this._fileRxBuffer.length} ${this._fileRxLastAckPos} ${this._fileRxBatchAckSize} ${this._fileRxBatchMsgSize}`);
-
-        // Check if ack required
-        if (ackRequired) {
-
-          // Ack timing
-          this._fileRxLastAckTime = Date.now();
-          this._fileRxLastAckPos = this._fileRxBuffer.length;
-
-          // Okto message
-          const cmdMsg = `{"cmdName":"dfAck","okto":${this._fileRxBuffer.length},` +
-                        `"streamID":${this._fileRxStreamID},"rslt":"ok"}`;
-
-          // Send without waiting for response
-          this._msgHandler.sendRICRESTNoResp(
-            cmdMsg,
-            RICRESTElemCode.RICREST_ELEM_CODE_COMMAND_FRAME,
-            bridgeID
-          );
-
-          // Debug
-          RaftLog.verbose(`_receiveFileContents ack generated at ${this._fileRxBuffer.length} msg ${cmdMsg}`);
+        // Ack on a timer (a batch of blocks is acked as it completes - see onFileBlock)
+        if (now - this._fileRxLastAckTime > this.FILE_RX_ACK_RESEND_TIMEOUT_MS) {
+          this._sendFileRxAck();
         }
 
         // Progress callback
@@ -651,6 +663,20 @@ export default class RaftFileHandler {
       };
       checkForComplete();
     });
+  }
+
+  // Ack what has been received (sent without waiting for a response)
+  _sendFileRxAck(): void {
+    this._fileRxLastAckTime = Date.now();
+    this._fileRxBlocksSinceAck = 0;
+    const cmdMsg = `{"cmdName":"dfAck","okto":${this._fileRxBuffer.length},` +
+                  `"streamID":${this._fileRxStreamID},"rslt":"ok"}`;
+    this._msgHandler.sendRICRESTNoResp(
+      cmdMsg,
+      RICRESTElemCode.RICREST_ELEM_CODE_COMMAND_FRAME,
+      this._fileRxBridgeID
+    );
+    RaftLog.verbose(`_sendFileRxAck ack at ${this._fileRxBuffer.length} msg ${cmdMsg}`);
   }
 
   async _receiveFileEnd(fileName: string, bridgeID: number | undefined): Promise<boolean> {
@@ -735,6 +761,15 @@ export default class RaftFileHandler {
 
       // Update last block time
       this._fileRxLastBlockTime = Date.now();
+
+      // Ack a batch as soon as it is complete, so the device can send the next without waiting (counted in
+      // blocks: the device may send smaller blocks than it said). The last block is acked when the transfer
+      // is seen to be complete
+      this._fileRxBlocksSinceAck++;
+      if ((this._fileRxBlocksSinceAck >= this._fileRxBatchAckSize) &&
+                  (this._fileRxBuffer.length < this._fileRxFileLen)) {
+        this._sendFileRxAck();
+      }
 
       // Debug
       // RaftLog.info(`onFileBlock filePos ${filePos} fileBlockData ${RaftUtils.bufferToHex(fileBlockData)} added to buffer`);
