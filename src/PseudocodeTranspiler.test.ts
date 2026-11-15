@@ -470,3 +470,58 @@ describe("return statements", () => {
         expect(new CustomAttrHandler().handleAttr(meta, new Uint8Array([4]), 0)).toEqual([[4]]);
     });
 });
+
+// ===== Casts, typed declarations and out.<name> reads, as the firmware's interpreter =====
+
+describe("casts and typed declarations", () => {
+    const run = (code: string, attrs: string[], buf: number[] = [0]) =>
+        new CustomAttrHandler().handleAttr(makeMeta(buf.length, attrs, "cast" + code, code), new Uint8Array(buf), 0);
+
+    test("integer casts truncate and wrap to the type", () => {
+        expect(run("out.a=(uint16_t)(0-1);out.b=(int16_t)0xFFFE;out.c=(int8_t)200;out.d=(uint32_t)(0-1);" +
+            "out.e=(int32_t)0xFFFFFFFF;out.f=(uint8_t)256;", ["a", "b", "c", "d", "e", "f"]))
+            .toEqual([[65535], [-2], [-56], [4294967295], [-1], [0]]);
+    });
+
+    test("int casts truncate towards zero; float casts leave the value", () => {
+        expect(run("out.a=(int)(7/2);out.b=(int)(0-3.7);out.c=(float)buf[0]/2;", ["a", "b", "c"], [5]))
+            .toEqual([[3], [-3], [2.5]]);
+    });
+
+    test("a cast applies to the unary expression after it", () => {
+        // (uint8_t) binds to buf[0] only, and nested casts apply innermost first
+        expect(run("out.a=(uint8_t)buf[0]+256;out.b=(int16_t)(uint8_t)300;out.c=(uint8_t)-buf[0];out.d=buf[(int)(3/2)];",
+            ["a", "b", "c", "d"], [5, 9])).toEqual([[261], [44], [251], [9]]);
+    });
+
+    test("typed declarations convert each declarator's value", () => {
+        expect(run("int16_t v=(buf[1]<<8)|buf[0];uint8_t a=300, b=0-1;int c=7/2, d=9/2;out.v=v;out.a=a;out.b=b;out.c=c;out.d=d;",
+            ["v", "a", "b", "c", "d"], [0xFE, 0xFF])).toEqual([[-2], [44], [255], [3], [4]]);
+    });
+
+    test("an int declaration with a call or index keeps its brackets", () => {
+        const js = transpilePseudocodeToJs("int a=toInt16(buf[0],buf[1]), b=2;");
+        expect(js).toContain("let a=Math.trunc(toInt16(buf[0],buf[1])),b=Math.trunc(2);");
+    });
+
+    test("casts in array element writes", () => {
+        const meta = makeArrayMeta(2, [{ n: "g", t: "<h[2]" }], "castarr", "out.g[(int)(1/2)]=(int16_t)((buf[1]<<8)|buf[0]);");
+        expect(new CustomAttrHandler().handleAttr(meta, new Uint8Array([0xFE, 0xFF]), 0)).toEqual([[-2, 0]]);
+    });
+});
+
+describe("reading out.<name>", () => {
+    test("gives the value written in this sample", () => {
+        const meta = makeMeta(1, ["a", "b"], "outread", "out.a=buf[0];out.b=out.a*2;out.a+=1;");
+        expect(new CustomAttrHandler().handleAttr(meta, new Uint8Array([5]), 0)).toEqual([[6], [10]]);
+    });
+
+    test("is NaN before it is written in the sample (writes don't carry over to the next sample)", () => {
+        const meta = makeMeta(2, ["a", "b"], "outreadnext",
+            "int i=0;while(i<2){if(i==0){out.a=buf[0];}out.b=out.a;i++;next;}");
+        const result = new CustomAttrHandler().handleAttr(meta, new Uint8Array([7, 0]), 0);
+        expect(result[0]).toEqual([7]);
+        expect(result[1][0]).toBe(7);
+        expect(result[1][1]).toBeNaN();
+    });
+});
