@@ -89,7 +89,11 @@ const PREAMBLE =
     'let __scalars = null;\n' +
     'const __arr = (typeof __arrayElems !== "undefined" && __arrayElems) ? __arrayElems : {};\n' +
     'const out = new Proxy({}, { set(_, p, v) { if (attrValues[p] && !__arr[p]) { if (!__scalars) __scalars = {}; ' +
-        '__scalars[p] = v; __sampleOpen = true; } return true; } });\n' +
+        '__scalars[p] = v; __sampleOpen = true; } return true; }, ' +
+        'get(_, p) { return (__scalars && p in __scalars) ? __scalars[p] : NaN; } });\n' +
+    'function __cast(v, bits, signed) { v = Number(v); if (!Number.isFinite(v)) return 0; v = v < 0 ? Math.ceil(v) : Math.floor(v); ' +
+        'if (bits === 32) return signed ? v | 0 : v >>> 0; const sh = 32 - bits; ' +
+        'return signed ? (v << sh) >> sh : (v >>> 0) & ((1 << bits) - 1); }\n' +
     'function __setElem(n, i, v) { const len = __arr[n]; if (!len || !attrValues[n] || !Number.isFinite(i)) return; i = i | 0; ' +
         'if (!(i >= 0 && i < len)) return; if (!__stage) __stage = {}; if (!__stage[n]) __stage[n] = new Array(len).fill(0); ' +
         '__stage[n][i] = v; __sampleOpen = true; }\n' +
@@ -99,6 +103,83 @@ const PREAMBLE =
         '__scalars = null; __stage = null; __sampleOpen = false; }\n' +
     'function toInt16(lo, hi) { const u = (hi << 8) | lo; return u & 0x8000 ? u - 0x10000 : u; }\n' +
     'function toInt32(b0, b1, b2, b3) { return (b3 << 24) | (b2 << 16) | (b1 << 8) | b0; }\n';
+
+// C integer types usable in declarations and casts, as the firmware's interpreter: [bits, signed]
+const INT_TYPES: Record<string, [number, boolean]> = {
+    int8_t: [8, true], uint8_t: [8, false], int16_t: [16, true], uint16_t: [16, false],
+    int32_t: [32, true], uint32_t: [32, false],
+};
+
+function isTypeName(tok: Token | undefined): boolean {
+    return !!tok && (tok.type === 'INT_KW' || tok.type === 'FLOAT_KW' || (tok.type === 'ID' && tok.value in INT_TYPES));
+}
+
+// JS for converting the value of jsExpr to a type: integer types truncate and wrap to their width
+// (int is int32_t); float leaves it as a number
+function castJs(typeTok: Token, jsExpr: string): string {
+    if (typeTok.type === 'FLOAT_KW') return `(+(${jsExpr}))`;
+    const [bits, signed] = typeTok.type === 'INT_KW' ? [32, true] : INT_TYPES[typeTok.value];
+    return `__cast(${jsExpr},${bits},${signed})`;
+}
+
+// Index after the bracketed group (LPAREN or LBRACK) opening at startIdx (-1 if unmatched)
+function groupEnd(tokens: Token[], startIdx: number): number {
+    const open = tokens[startIdx].type;
+    const close = open === 'LPAREN' ? 'RPAREN' : 'RBRACK';
+    let depth = 0;
+    for (let i = startIdx; i < tokens.length; i++) {
+        if (tokens[i].type === open) depth++;
+        else if (tokens[i].type === close && --depth === 0) return i + 1;
+    }
+    return -1;
+}
+
+// Index after the unary expression starting at idx (a cast's operand): prefix operators and casts, then a
+// number, name or parenthesised expression, then any indexes or call arguments
+function unaryEnd(tokens: Token[], idx: number): number {
+    let i = idx;
+    for (;;) {
+        const t = tokens[i];
+        if (!t) return -1;
+        if (['SUB_OP', 'ADD_OP', 'BITWISE_NOT', 'LOGICAL_NOT'].includes(t.type)) { i++; continue; }
+        if (t.type === 'LPAREN' && isTypeName(tokens[i + 1]) && tokens[i + 2]?.type === 'RPAREN') { i += 3; continue; }
+        break;
+    }
+    const t = tokens[i];
+    if (t.type === 'LPAREN') {
+        i = groupEnd(tokens, i);
+    } else if (['NUM_INT', 'NUM_FLOAT', 'HEX_NUM', 'ID', 'RAW'].includes(t.type)) {
+        i++;
+    } else {
+        return -1;
+    }
+    while (i > 0 && i < tokens.length && (tokens[i].type === 'LBRACK' || tokens[i].type === 'LPAREN')) {
+        i = groupEnd(tokens, i);
+    }
+    return i;
+}
+
+// Rewrite casts, (type)expr, as one RAW token converting the operand (as the firmware's interpreter)
+function rewriteCasts(tokens: Token[]): Token[] {
+    const result: Token[] = [];
+    let i = 0;
+    while (i < tokens.length) {
+        const tok = tokens[i];
+        if (!(tok.type === 'LPAREN' && isTypeName(tokens[i + 1]) && tokens[i + 2]?.type === 'RPAREN')) {
+            result.push(tok);
+            i++;
+            continue;
+        }
+        const end = unaryEnd(tokens, i + 3);
+        if (end < 0) {
+            throw new Error(`pseudocode cast (${tokens[i + 1].value}) has no operand`);
+        }
+        const operandJs = rewriteCasts(tokens.slice(i + 3, end)).map(t => t.value).join('');
+        result.push({ type: 'RAW', value: castJs(tokens[i + 1], operandJs) });
+        i = end;
+    }
+    return result;
+}
 
 // Run the decode body in its own function so an early `return` still reaches the final
 // flush; close a sample left open by a decode that never calls `next`
@@ -149,8 +230,8 @@ function rewriteArrayWrites(tokens: Token[]): Token[] {
         if (valTokens.length === 0) {
             throw new Error(`pseudocode ${tok.value}[...] = has no value`);
         }
-        const idxJs = tokens.slice(i + 2, closeIdx).map(t => t.value).join('');
-        const valJs = valTokens.map(t => t.value).join('');
+        const idxJs = rewriteCasts(tokens.slice(i + 2, closeIdx)).map(t => t.value).join('');
+        const valJs = rewriteCasts(valTokens).map(t => t.value).join('');
         result.push({ type: 'RAW', value: `__setElem(${JSON.stringify(name)},(${idxJs}),(${valJs}))` });
         i = j;
     }
@@ -158,38 +239,55 @@ function rewriteArrayWrites(tokens: Token[]): Token[] {
 }
 
 export function transpilePseudocodeToJs(pseudocode: string): string {
-    const tokens = rewriteArrayWrites(tokenize(pseudocode));
+    const tokens = rewriteCasts(rewriteArrayWrites(tokenize(pseudocode)));
     let js = PREAMBLE + BODY_START;
 
-    // Track int declarations so we can wrap the init expression in Math.trunc()
-    // to emulate C integer division semantics
-    let afterIntKw = false;
-    let wrappedInTrunc = false;
+    // A declaration's values are converted to its type (int: Math.trunc, to emulate C integer division;
+    // int8_t..uint32_t: truncated and wrapped); float values are left as they are. declType is the type of the
+    // declaration being transpiled, and convertOpen whether a value's conversion has been opened (closed at the
+    // declarator's end: a comma or semicolon outside brackets)
+    let declType: Token | null = null;
+    let convertOpen = false;
+    let depth = 0;
+    const closeConversion = () => {
+        if (convertOpen && declType) {
+            js += declType.type === 'INT_KW' ? ')' : `,${INT_TYPES[declType.value][0]},${INT_TYPES[declType.value][1]})`;
+        }
+        convertOpen = false;
+    };
 
-    for (const token of tokens) {
+    for (let idx = 0; idx < tokens.length; idx++) {
+        const token = tokens[idx];
+        // A type name followed by a variable name starts a declaration
+        if (declType === null && isTypeName(token) && tokens[idx + 1]?.type === 'ID') {
+            js += 'let ';
+            declType = token.type === 'FLOAT_KW' ? null : token;
+            continue;
+        }
         switch (token.type) {
-            case 'INT_KW':
-                js += 'let ';
-                afterIntKw = true;
+            case 'LPAREN': case 'LBRACK':
+                depth++;
+                js += token.value;
                 break;
-            case 'FLOAT_KW':
-                js += 'let ';
-                afterIntKw = false;
+            case 'RPAREN': case 'RBRACK':
+                depth--;
+                js += token.value;
                 break;
             case 'ASSIGN':
                 js += '=';
-                if (afterIntKw) {
-                    js += 'Math.trunc(';
-                    wrappedInTrunc = true;
+                if (declType && depth === 0 && !convertOpen) {
+                    js += declType.type === 'INT_KW' ? 'Math.trunc(' : '__cast(';
+                    convertOpen = true;
                 }
                 break;
+            case 'COMMA':
+                if (depth === 0) closeConversion();
+                js += ',';
+                break;
             case 'SEMI':
-                if (wrappedInTrunc) {
-                    js += ')';
-                    wrappedInTrunc = false;
-                }
+                closeConversion();
+                declType = null;
                 js += ';';
-                afterIntKw = false;
                 break;
             case 'RETURN':
                 // Tokens are concatenated without spaces - keep "return x" from becoming "returnx"
