@@ -1,6 +1,7 @@
 import RaftCommsStats from "./RaftCommsStats";
 import RaftFileHandler from "./RaftFileHandler";
 import RaftMsgHandler from "./RaftMsgHandler";
+import RaftMiniHDLC from "./RaftMiniHDLC";
 import { RaftFileSendType } from "./RaftTypes";
 
 // A device that takes uploads as the firmware's FileUploadOKTOProtocol does: every block it receives counts towards
@@ -183,5 +184,183 @@ describe("RaftFileHandler upload", () => {
     handler.onOktoMsg(400);
     expect(state._ackedFilePos).toBe(800);
     expect(state._batchAckReceived).toBe(false);
+  });
+});
+
+// ===== Downloads =====
+
+// A device that sends a file as the firmware's FileDownloadOKTOProtocol does: blocks as fast as the ack window
+// (batch) allows; when nothing is acked for `ackTimeoutMs` it goes back to the last position acked - with blocks of
+// half the size if `fallback` (RaftCore after 1.67.0), the same size otherwise. `deliverMax`: the largest block its
+// transport delivers (bigger ones are lost, as a serial console that offers more than its transmit buffer takes)
+class SimDownloadDevice {
+  starts: number[] = [];
+  acks: number[] = [];
+  cancels = 0;
+  blocksDelivered = 0;
+  crcOverride?: string;
+  handler?: RaftFileHandler;
+  private data: Uint8Array = new Uint8Array(0);
+  private block = 0;
+  private batch = 0;
+  private okto = 0;
+  private sentUpto = 0;
+  private lastProgressMs = 0;
+  private session = 0;
+  private timer?: ReturnType<typeof setInterval>;
+  // As the firmware: the first block waits for the client's first ack (or 200 ms)
+  private ready = false;
+  private startMs = 0;
+  startedByAck = 0;
+
+  constructor(private contents: Uint8Array, private deliverMax = Infinity, private fallback = false,
+              private ackTimeoutMs = 100, private blockMax = 5000) {}
+
+  msgHandler(): RaftMsgHandler {
+    return {
+      sendRICREST: async (cmd: string) => {
+        const json = JSON.parse(cmd);
+        if (json.cmdName === "dfStart") {
+          this.starts.push(json.batchMsgSize);
+          this.data = this.contents;
+          this.block = Math.min(json.batchMsgSize, this.blockMax);
+          this.batch = json.batchAckSize;
+          this.okto = this.sentUpto = 0;
+          this.lastProgressMs = Date.now();
+          this.ready = false;
+          this.startMs = Date.now();
+          const session = ++this.session;
+          clearInterval(this.timer);
+          this.timer = setInterval(() => this.service(session), 5);
+          setTimeout(() => this.service(session), 0);
+          return { rslt: "ok", batchMsgSize: this.block, batchAckSize: this.batch, streamID: 7, fileLen: this.data.length };
+        }
+        if (json.cmdName === "dfEnd") {
+          clearInterval(this.timer);
+          const crc = this.crcOverride ?? RaftMiniHDLC.crc16(this.data).toString(16).padStart(4, "0");
+          return { rslt: "ok", crc16: crc };
+        }
+        return { rslt: "ok" };
+      },
+      sendRICRESTNoResp: async (cmd: string) => {
+        const json = JSON.parse(cmd);
+        if (json.cmdName === "dfAck") {
+          this.acks.push(json.okto);
+          if (!this.ready) {
+            this.ready = true;
+            this.startedByAck++;
+            this.lastProgressMs = Date.now();
+          }
+          if (json.okto > this.okto) {
+            this.okto = json.okto;
+            this.lastProgressMs = Date.now();
+          }
+          this.service(this.session);
+        } else if (json.cmdName === "dfCancel") {
+          this.cancels++;
+          this.session++;
+          clearInterval(this.timer);
+        }
+        return true;
+      },
+    } as unknown as RaftMsgHandler;
+  }
+
+  stop() {
+    clearInterval(this.timer);
+  }
+
+  private service(session: number) {
+    if (session !== this.session) return;
+    if (!this.ready) {
+      if (Date.now() - this.startMs < 200) return;
+      this.ready = true;
+      this.lastProgressMs = Date.now();
+    }
+    if (Date.now() - this.lastProgressMs > this.ackTimeoutMs) {
+      this.sentUpto = this.okto;
+      this.lastProgressMs = Date.now();
+      if (this.fallback) this.block = Math.max(Math.floor(this.block / 2), 64);
+    }
+    this.sentUpto = Math.max(this.sentUpto, this.okto);
+    while (this.sentUpto < this.data.length && Math.ceil((this.sentUpto - this.okto) / this.block) < this.batch) {
+      const pos = this.sentUpto;
+      const bytes = this.data.slice(pos, pos + this.block);
+      this.sentUpto += bytes.length;
+      if (bytes.length <= this.deliverMax) {
+        this.blocksDelivered++;
+        this.handler?.onFileBlock(((7 << 24) | pos) >>> 0, bytes);
+      }
+    }
+  }
+}
+
+function downloadSetup(fileLen: number, deliverMax = Infinity, fallback = false, blockMax = 5000) {
+  const contents = Uint8Array.from({ length: fileLen }, (_, i) => (i * 7 + (i >> 8)) & 0xff);
+  const device = new SimDownloadDevice(contents, deliverMax, fallback, 100, blockMax);
+  const handler = new RaftFileHandler(device.msgHandler(), new RaftCommsStats());
+  device.handler = handler;
+  const intact = (data: Uint8Array | null) => !!data && data.length === fileLen && data.every((b, i) => b === contents[i]);
+  return { device, handler, intact };
+}
+
+describe("RaftFileHandler download", () => {
+  it("acks each batch as it arrives, so the device isn't left waiting", async () => {
+    // 200 blocks in batches of 4: 50 batches. Acked on the 50ms poll (as before) that took over 2.5s
+    const { device, handler, intact } = downloadSetup(200 * 500, Infinity, false, 500);
+    const start = Date.now();
+    const result = await handler.fileReceive("test.bin", "fs", undefined);
+    device.stop();
+    expect(result.downloadedOk).toBe(true);
+    expect(intact(result.fileData)).toBe(true);
+    expect(Date.now() - start).toBeLessThan(1000);
+    expect(device.starts).toEqual([5000]);
+    // An ack at the start, then for each batch (4 blocks of 500), and the final one
+    expect(device.acks.slice(0, 4)).toEqual([0, 2000, 4000, 6000]);
+    expect(device.acks[device.acks.length - 1]).toBe(100000);
+    // The device's first block waited for that first ack (not for its 200ms start time)
+    expect(device.startedByAck).toBe(1);
+  });
+
+  it("starts again with smaller blocks when none arrive (firmware that offers more than it can send)", async () => {
+    const { device, handler, intact } = downloadSetup(9000, 1300);
+    handler.FILE_RX_STALL_MS = 150;
+    const result = await handler.fileReceive("test.bin", "fs", undefined);
+    expect(intact(result.fileData)).toBe(true);
+    expect(device.starts).toEqual([5000, 2500, 1250]);
+    expect(device.cancels).toBe(2);
+    // The size that worked is asked for first from then on
+    const again = await handler.fileReceive("test.bin", "fs", undefined);
+    device.stop();
+    expect(intact(again.fileData)).toBe(true);
+    expect(device.starts).toEqual([5000, 2500, 1250, 1250]);
+  });
+
+  it("fails when even the smallest blocks don't arrive", async () => {
+    const { device, handler } = downloadSetup(3000, 100);
+    handler.FILE_RX_STALL_MS = 50;
+    (handler as unknown as { BLOCK_ACK_TIMEOUT_MS: number }).BLOCK_ACK_TIMEOUT_MS = 300;
+    await expect(handler.fileReceive("test.bin", "fs", undefined)).rejects.toThrow("fileReceive failed");
+    device.stop();
+    expect(device.starts).toEqual([5000, 2500, 1250, 625, 312]);
+  });
+
+  it("takes smaller blocks than the device said (firmware that halves its block size)", async () => {
+    const { device, handler, intact } = downloadSetup(20000, 700, true, 2400);
+    const start = Date.now();
+    const result = await handler.fileReceive("test.bin", "fs", undefined);
+    device.stop();
+    expect(intact(result.fileData)).toBe(true);
+    expect(device.starts).toEqual([5000]);
+    // Two fallbacks by the device (100ms each), then blocks acked a batch at a time (not on the 1s ack timer)
+    expect(Date.now() - start).toBeLessThan(1500);
+  });
+
+  it("fails a download whose data doesn't match the device's CRC", async () => {
+    const { device, handler } = downloadSetup(3000);
+    device.crcOverride = "0000";
+    const result = await handler.fileReceive("test.bin", "fs", undefined);
+    device.stop();
+    expect(result.downloadedOk).toBe(false);
   });
 });
