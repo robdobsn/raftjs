@@ -714,8 +714,8 @@ export class DeviceManager implements RaftDeviceMgrIF{
                 const pollRespMetadata = deviceState.deviceTypeInfo!.resp!;
 
                 // Process samples within this record
-                const attrLengthsBefore = this.snapshotAttrLengths(deviceState.deviceAttributes, pollRespMetadata);
-                const timelineLenBefore = deviceState.deviceTimeline.timestampsUs.length;
+                const attrTotalsBefore = this.snapshotAttrTotals(deviceState.deviceAttributes, pollRespMetadata);
+                const timelineTotalBefore = deviceState.deviceTimeline.totalSamplesAdded;
                 const totalSamplesBefore = deviceState.deviceTimeline.totalSamplesAdded;
                 if (recordPayloadFormat === "DevbinV1Framed") {
                     while (pollDataPos < samplesEndPos) {
@@ -818,7 +818,7 @@ export class DeviceManager implements RaftDeviceMgrIF{
 
                 // Inform decoded-data callbacks
                 this.emitDecodedData(deviceKey, busNum.toString(), devAddrHex, deviceState,
-                    pollRespMetadata, attrLengthsBefore, timelineLenBefore);
+                    pollRespMetadata, attrTotalsBefore, timelineTotalBefore);
 
                 const newSamples = deviceState.deviceTimeline.totalSamplesAdded - totalSamplesBefore;
                 this.updateDeviceStats(deviceKey, newSamples, Date.now());
@@ -1021,8 +1021,8 @@ export class DeviceManager implements RaftDeviceMgrIF{
             // Iterate over attributes in the group
             const pollRespMetadata = deviceState.deviceTypeInfo!.resp!;
 
-            const attrLengthsBefore = this.snapshotAttrLengths(deviceState.deviceAttributes, pollRespMetadata);
-            const timelineLenBefore = deviceState.deviceTimeline.timestampsUs.length;
+            const attrTotalsBefore = this.snapshotAttrTotals(deviceState.deviceAttributes, pollRespMetadata);
+            const timelineTotalBefore = deviceState.deviceTimeline.totalSamplesAdded;
             const totalSamplesBefore = deviceState.deviceTimeline.totalSamplesAdded;
 
             // Loop
@@ -1039,7 +1039,7 @@ export class DeviceManager implements RaftDeviceMgrIF{
             }
 
             this.emitDecodedData(deviceKey, busName, devAddr, deviceState, pollRespMetadata,
-                attrLengthsBefore, timelineLenBefore, attrGroupName, markers);
+                attrTotalsBefore, timelineTotalBefore, attrGroupName, markers);
 
             const newSamples = deviceState.deviceTimeline.totalSamplesAdded - totalSamplesBefore;
             this.updateDeviceStats(deviceKey, newSamples, Date.now());
@@ -1816,15 +1816,22 @@ export class DeviceManager implements RaftDeviceMgrIF{
     // Helpers for decoded data callbacks
     ////////////////////////////////////////////////////////////////////////////
 
-    private snapshotAttrLengths(deviceAttrs: DeviceAttributesState, pollRespMetadata: DeviceTypeInfo["resp"]): Record<string, number> {
-        const lengths: Record<string, number> = {};
+    // Counts of values added so far (not lengths: once an attribute's history is full its length stops growing,
+    // so new values must be found from how many were added)
+    private snapshotAttrTotals(deviceAttrs: DeviceAttributesState, pollRespMetadata: DeviceTypeInfo["resp"]): Record<string, number> {
+        const totals: Record<string, number> = {};
         if (!pollRespMetadata) {
-            return lengths;
+            return totals;
         }
         pollRespMetadata.a.forEach((attr) => {
-            lengths[attr.n] = deviceAttrs[attr.n]?.values.length ?? 0;
+            totals[attr.n] = deviceAttrs[attr.n]?.totalValuesAdded ?? 0;
         });
-        return lengths;
+        return totals;
+    }
+
+    // The last numAdded items of a history (all of it if more were added than it keeps)
+    private static lastAdded<T>(items: T[], numAdded: number): T[] {
+        return numAdded > 0 ? items.slice(Math.max(0, items.length - numAdded)) : [];
     }
 
     private emitDecodedData(
@@ -1833,8 +1840,8 @@ export class DeviceManager implements RaftDeviceMgrIF{
         devAddr: string,
         deviceState: DeviceState,
         pollRespMetadata: DeviceTypeInfo["resp"],
-        attrLengthsBefore: Record<string, number>,
-        timelineLenBefore: number,
+        attrTotalsBefore: Record<string, number>,
+        timelineTotalBefore: number,
         attrGroupName = "",
         markers?: Record<string, unknown>,
     ): void {
@@ -1851,9 +1858,9 @@ export class DeviceManager implements RaftDeviceMgrIF{
             if (!attrState) {
                 return;
             }
-            const prevLen = attrLengthsBefore[attr.n] ?? 0;
-            if (attrState.values.length > prevLen) {
-                attrValues[attr.n] = attrState.values.slice(prevLen);
+            const numAdded = (attrState.totalValuesAdded ?? 0) - (attrTotalsBefore[attr.n] ?? 0);
+            if (numAdded > 0) {
+                attrValues[attr.n] = DeviceManager.lastAdded(attrState.values, numAdded);
                 hasValues = hasValues || attrValues[attr.n].length > 0;
             }
         });
@@ -1862,7 +1869,8 @@ export class DeviceManager implements RaftDeviceMgrIF{
             return;
         }
 
-        const timestampsUs = deviceState.deviceTimeline.timestampsUs.slice(timelineLenBefore);
+        const timeline = deviceState.deviceTimeline;
+        const timestampsUs = DeviceManager.lastAdded(timeline.timestampsUs, timeline.totalSamplesAdded - timelineTotalBefore);
 
         const decoded: DeviceDecodedData = {
             deviceKey,

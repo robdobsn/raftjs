@@ -220,6 +220,8 @@ export default class AttributeHandler {
             devAttrsState[attrDef.n].values.push(...newAttrValues[attrIdx]);
             devAttrsState[attrDef.n].newData = newAttrValues[attrIdx].length > 0;
             devAttrsState[attrDef.n].numNewValues = newAttrValues[attrIdx].length;
+            devAttrsState[attrDef.n].totalValuesAdded =
+                (devAttrsState[attrDef.n].totalValuesAdded ?? 0) + newAttrValues[attrIdx].length;
         }
 
         // --- Piecewise EMA timestamp reconstruction ---

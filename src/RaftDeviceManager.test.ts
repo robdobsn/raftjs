@@ -127,6 +127,43 @@ describe("DeviceManager devbin long-sample escape", () => {
     });
 });
 
+describe("DeviceManager decoded data callbacks", () => {
+    const smallInfo = makeTypeInfo("Small", 2, [{ n: "v", t: ">H" }]);
+
+    it("keeps reporting new values once an attribute's history is full", async () => {
+        const deviceManager = await makeDeviceManager({ "4": smallInfo });
+        deviceManager.setMaxDataPointsToStore(3);
+        const reports: Array<{ values: (number | string)[]; timestampsUs: number[] }> = [];
+        deviceManager.addDecodedDataCallback((decoded) => {
+            reports.push({ values: decoded.attrValues["v"], timestampsUs: decoded.timestampsUs });
+        });
+        // Each message has two samples; the history keeps three, so it is full from the second message
+        for (let msgIdx = 0; msgIdx < 5; msgIdx++) {
+            const v = msgIdx * 2;
+            await deviceManager.handleClientMsgBinary(devbinFrame([
+                devbinRecord(0x81, 0x0015, 4, msgIdx, [
+                    [...u16(msgIdx * 100), ...u16(v)],
+                    [...u16(msgIdx * 100 + 10), ...u16(v + 1)],
+                ]),
+            ]));
+        }
+        expect(reports.map(r => r.values)).toEqual([[0, 1], [2, 3], [4, 5], [6, 7], [8, 9]]);
+        expect(reports.every(r => r.timestampsUs.length === 2)).toBe(true);
+        expect(deviceManager.getDeviceState("1_15").deviceAttributes["v"].values).toEqual([7, 8, 9]);
+    });
+
+    it("reports what the history keeps when one message has more samples than that", async () => {
+        const deviceManager = await makeDeviceManager({ "4": smallInfo });
+        deviceManager.setMaxDataPointsToStore(2);
+        const reports: (number | string)[][] = [];
+        deviceManager.addDecodedDataCallback((decoded) => reports.push(decoded.attrValues["v"]));
+        await deviceManager.handleClientMsgBinary(devbinFrame([
+            devbinRecord(0x81, 0x0015, 4, 1, [0, 1, 2, 3].map(i => [...u16(i * 10), ...u16(i)])),
+        ]));
+        expect(reports).toEqual([[2, 3]]);
+    });
+});
+
 describe("DeviceManager binary devbin parsing", () => {
     const accelInfo = makeTypeInfo("MXC400xXC", 7, [
         { n: "x", t: ">h" },
