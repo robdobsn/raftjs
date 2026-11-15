@@ -119,6 +119,8 @@ export interface DeviceAttributeState {
     newData: boolean;
     numNewValues: number;
     values: (number | string)[];
+    // Values added since the attribute was created (values[] keeps only the latest maxDataPoints of them)
+    totalValuesAdded?: number;
     units: string;
     range: number[];
     format: string;
