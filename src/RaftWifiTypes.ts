@@ -23,14 +23,28 @@ export class RaftWifiConnStatus {
   validMs = 0;
 }
 
+// Response to sysmodinfo/NetMan. Current firmware (RaftCore's NetworkSystem) sends the hostname and a
+// wifiSTA object; older firmware sent the fields at the top level. All fields are optional as a result.
+export type RaftSysModInfoWiFiSTA = {
+  conn?: number;      // 1 if connected with an IP address
+  SSID?: string;
+  MAC?: string;
+  RSSI?: number;
+  IP?: string;
+  paused?: number;    // present (1) only while WiFi is paused
+};
+
 export class RaftSysModInfoWiFi {
   rslt = 'ok';
-  isConn = 0;
-  isPaused = 0;
-  connState = 'None';
-  SSID = '';
-  IP = '';
-  Hostname = '';
-  WiFiMAC = '';
+  // Current firmware
+  hostname?: string;
+  wifiSTA?: RaftSysModInfoWiFiSTA;
+  // Older firmware
+  isConn?: number;
+  isPaused?: number;
+  connState?: string;
+  SSID?: string;
+  IP?: string;
+  Hostname?: string;
+  WiFiMAC?: string;
 }
-

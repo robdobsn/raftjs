@@ -469,25 +469,27 @@ export default class RaftSystemUtils {
         RaftSysModInfoWiFi
       >("sysmodinfo/NetMan");
 
-      RaftLog.debug(
-        `wifiConnStatus rslt ${ricSysModInfoWiFi.rslt} isConn ${ricSysModInfoWiFi.isConn} paused ${ricSysModInfoWiFi.isPaused}`
-      );
-
       // Check status indicates WiFi connected
       if (ricSysModInfoWiFi.rslt === "ok") {
-        this._wifiConnStatus.connState =
-          ricSysModInfoWiFi.isConn !== 0
-            ? RaftWifiConnState.WIFI_CONN_CONNECTED
-            : RaftWifiConnState.WIFI_CONN_NONE;
-        this._wifiConnStatus.isPaused = ricSysModInfoWiFi.isPaused !== 0;
-        this._wifiConnStatus.ipAddress = ricSysModInfoWiFi.IP;
-        this._wifiConnStatus.hostname = ricSysModInfoWiFi.Hostname;
-        this._wifiConnStatus.ssid = ricSysModInfoWiFi.SSID;
-        this._wifiConnStatus.bssid = ricSysModInfoWiFi.WiFiMAC;
-        this._wifiConnStatus.validMs = Date.now();
-        return (
-          ricSysModInfoWiFi.isConn !== 0 || ricSysModInfoWiFi.isPaused !== 0
+        // Current firmware reports WiFi station state in a wifiSTA object (with paused present only
+        // while paused); older firmware reported isConn, isPaused etc at the top level. A field that
+        // is absent means not connected / not paused
+        const sta = ricSysModInfoWiFi.wifiSTA;
+        const isConn = sta ? !!sta.conn : !!ricSysModInfoWiFi.isConn;
+        const isPaused = sta ? !!sta.paused : !!ricSysModInfoWiFi.isPaused;
+        RaftLog.debug(
+          `wifiConnStatus rslt ${ricSysModInfoWiFi.rslt} isConn ${isConn} paused ${isPaused}`
         );
+        this._wifiConnStatus.connState = isConn
+          ? RaftWifiConnState.WIFI_CONN_CONNECTED
+          : RaftWifiConnState.WIFI_CONN_NONE;
+        this._wifiConnStatus.isPaused = isPaused;
+        this._wifiConnStatus.ipAddress = (sta ? sta.IP : ricSysModInfoWiFi.IP) ?? "";
+        this._wifiConnStatus.hostname = ricSysModInfoWiFi.hostname ?? ricSysModInfoWiFi.Hostname ?? "";
+        this._wifiConnStatus.ssid = (sta ? sta.SSID : ricSysModInfoWiFi.SSID) ?? "";
+        this._wifiConnStatus.bssid = (sta ? sta.MAC : ricSysModInfoWiFi.WiFiMAC) ?? "";
+        this._wifiConnStatus.validMs = Date.now();
+        return isConn || isPaused;
       }
     } catch (error) {
       RaftLog.debug(`[DEBUG]: wifiConnStatus sysmodinfo failed ${error}`);
